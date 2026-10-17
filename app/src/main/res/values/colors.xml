@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="loop_black">#FF000000</color>
+    <color name="loop_violet">#FF7B5CFF</color>
+    <color name="loop_violet_light">#FFB9A9FF</color>
+    <color name="ic_launcher_background">#FF15102A</color>
+</resources>

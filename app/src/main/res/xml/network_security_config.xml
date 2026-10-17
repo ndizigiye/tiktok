@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The Loop backend is a development server spoken to over plain HTTP: the
+    Android emulator reaches the host machine at 10.0.2.2 and physical devices
+    reach it via a LAN address chosen in Settings. Neither has a certificate,
+    so cleartext traffic is permitted. Switch the server to HTTPS and set
+    cleartextTrafficPermitted="false" for any public deployment.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -134,6 +134,12 @@ Content`) so players can seek and prefetch:
 - `GET /media/thumbs/{file}`
 - `GET /media/avatars/{file}`
 
+## Web
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/v/{id}` | `200 text/html`: the public page behind the app's "Copy link" / share action. A small self-contained page (inline CSS, no external assets) with the author, caption, sound, counts and an HTML5 `<video controls playsinline loop>` of the clip, using the thumbnail as `poster`. `404` (`ErrorDto`) for unknown ids. Share links are `<baseUrl>v/<id>`. |
+
 ## Server configuration
 
 Environment variables (all optional):

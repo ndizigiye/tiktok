@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window theme only; all UI theming happens in Compose (ui.theme.LoopTheme). -->
+    <style name="Theme.Loop" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/loop_black</item>
+        <item name="android:colorAccent">@color/loop_violet</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/loop_black</item>
+    </style>
+</resources>
