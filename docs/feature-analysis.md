@@ -33,7 +33,7 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
 | 6 | How are comments structured? | UI observation | answered | observed behaviour |
 | 7 | What does sharing offer? | UI observation | answered | observed behaviour |
 | 8 | How does discovery/search work? | UI observation | answered | observed behaviour |
-| 9 | How does capture work (segments, timer, flip, upload)? | UI observation; static code for encoder settings | partially answered; encoder settings **unresolved** | observed behaviour |
+| 9 | How does capture work (segments, timer, flip, upload)? | UI observation; static code for encoder settings | answered; production overrides unresolved | observed behaviour + REA evidence |
 | 10 | What is on a profile? | UI observation | answered | observed behaviour |
 | 11 | What does the inbox show? | UI observation | answered | observed behaviour |
 | 12 | Which Android components, permissions and libraries does the official client use? | manifest + class inventory | **answered (static)** | REA evidence + dex index |
@@ -49,7 +49,7 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
 | Signature | v1/v2/v3 verify (`apksigner`); one signer, DN `CN=musical.ly, OU=android, O=musical.ly Inc.`, certificate SHA-256 `9041803e91bcb814b4b4399fb5c85a91640b755e5e8ba76813814bf4cf2ab5ba`. Not compared against an independent reference of the official certificate. |
 | Tools | REA 6.5.0 CLI, jadx-headless-mcp 0.7.1 (SHA-256 `6e5eacf5…ff75`, verified against REA's pinned digest), OpenJDK 21 |
 | Method | The full APK (53 dex files, 438,323 classes) exceeded the memory available to JADX in the analysis sandbox, so REA ran on **derived slices**: the original `AndroidManifest.xml` and `resources.arsc` plus selected dex members, chosen with a class→dex index built from the dex headers. A slice only contains the classes it was built from, so cross-slice references are not covered. |
-| Slices | `manifest-slice.apk` (manifest + resources + classes41.dex) `82a8eedd…c337`; `q3-preload.apk` (classes24, 4, 2, 18, 39) `8b06b912…1b4e` |
+| Slices | `manifest-slice.apk` (manifest + resources + classes41.dex) `82a8eedd…c337`; `q3-preload.apk` (classes24, 4, 2, 18, 39) `8b06b912…1b4e`; `q4-capture.apk` (classes15, 39) `fd05b819…9245` |
 
 ## Findings and design decisions
 
@@ -159,16 +159,31 @@ engine, not ExoPlayer), and the cache size.
   and a maximum length; flip camera, flash, countdown timer; upload from the
   gallery; a post screen with caption, hashtags and mentions.
 - **Static:** capture and export run on the vendor's own editing SDK
-  (`com.ss.android.vesdk`, 301 named classes) rather than CameraX; export
-  settings live in a `creative.compileconfig` package (encode parameters,
-  resolution levels). **Unresolved:** the REA inspection of those classes was
-  not run (the analysis session's permission policy stopped it).
+  (`com.ss.android.vesdk`, 301 named classes) rather than CameraX. Export
+  settings are a set of remotely overridable properties (each change is
+  logged with a strategy stage, name and priority) whose built-in defaults are
+  (REA, `q4-capture.apk`: class `VEVideoEncodeConfigParams` `ev_414e9937…32da`,
+  constructor `ev_184ff1ae…453c`; resolution model `CompileConfigResolution`
+  `ev_79165bef…7a80`):
+  - output 576 × 1024 (portrait 9:16);
+  - average-bitrate mode, target 4,194,304 bit/s (4 Mbit/s), software encoder
+    capped at 15 Mbit/s with its fastest preset;
+  - keyframe interval (GOP) 60 frames; frame rate left at the source's
+    (unset = -1);
+  - hardware encoder, HDR 10-bit and remuxing (skipping re-encode) all off by
+    default; a network-level input exists, which suggests quality is adapted
+    to the connection.
+- **Inference:** clips are re-encoded on the device to a modest bitrate before
+  upload, trading quality for upload time; the remote overrides tune this per
+  device and network.
 - **Static (manifest):** publishing runs in a foreground service of type
   `dataSync`, so an upload continues when the user leaves the app.
 - **Loop:** CameraX `Recorder` with `Recording.pause()/resume()` so all segments
   land in one MP4 (no client-side concatenation), 60 s cap, 3 s timer, torch,
-  Photo Picker upload, multipart upload with progress (`ui/create/`). Planned
-  from the finding: run the upload in a `dataSync` foreground service so it
+  Photo Picker upload, multipart upload with progress (`ui/create/`). From the
+  findings: record at CameraX's HD level (1280 × 720, the closest fixed
+  quality to 576 × 1024) with a 4 Mbit/s target bitrate so a 60 s clip stays
+  around 30 MB, and run the upload in a `dataSync` foreground service so it
   survives backgrounding. Audio mixing of a chosen sound is not implemented;
   the sound is attached as metadata.
 
@@ -215,6 +230,6 @@ picture-in-picture for the full-screen pager, and a foreground upload service.
 
 ## Residual unknowns
 
-- Production values of the preload and buffer thresholds (remote A/B config).
-- Capture/export encoder settings (question 9; the REA inspection was not run).
+- Production values of the preload, buffer and encoder settings (remote A/B
+  config; only the built-in defaults are in the APK).
 - Playback engine internals and cache sizing.
