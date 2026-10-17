@@ -1,0 +1,23 @@
+# Gradle / build
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Server runtime data (database, uploaded and generated media)
+server/data/
+*.db
+*.db-journal
+
+# Signing
+*.jks
+*.keystore
