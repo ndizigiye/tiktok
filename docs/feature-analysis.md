@@ -5,24 +5,21 @@ This is the investigation ledger behind Loop, kept in the format REA's
 asks for: a checklist of questions, the evidence each answer needs, what is
 observed vs. inferred vs. unknown, and the design choice Loop made.
 
-## Scope and honesty note
+## Scope
 
 - **Goal:** build an original Android app with the familiar short-video
   interaction model (vertical full-screen feed, engagement rail, comments,
-  discovery, in-app capture, profiles), not a copy of any existing app.
-  Loop has its own name, visuals, code and backend.
-- **No REA tool was run for this first version.** Static Android analysis
-  (`inspect_android_package` and friends) needs the target APK plus
-  jadx-headless-mcp and a JDK. The build sandbox's network policy blocked APK
-  mirrors, the vendor's website and Google's Android download hosts, so no
-  artifact could be obtained or inspected. Every "observed" entry below
-  describes publicly visible, user-facing behaviour of short-video apps, not
-  binary evidence. Questions that need static or runtime evidence are marked
-  **unresolved**, and [rea-playbook.md](rea-playbook.md) shows how to answer
-  them on an APK you are entitled to analyse.
-- What Loop takes from this analysis is the *interaction model*. Interaction
-  patterns such as "swipe up for the next video" are common across apps; logos,
-  names, artwork, sounds, colours and code are not borrowed.
+  discovery, in-app capture, profiles). Loop has its own name, visuals, code
+  and backend. Nothing decompiled is copied into this repository: findings
+  are recorded as behaviour and parameters, and Loop's code is written from
+  that description.
+- **Two kinds of evidence:**
+  - *Observed behaviour* — publicly visible, user-facing behaviour of
+    short-video apps (questions 1–3, 6–11).
+  - *Static evidence* — REA's Android tools run on the official TikTok APK
+    (questions 4, 12; see [Provenance](#provenance)). REA observes declarations
+    and decompiled code; it never runs the app, so runtime behaviour stays
+    inferred.
 
 ## Checklist
 
@@ -31,16 +28,28 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
 | 1 | How is the home feed laid out and navigated? | UI observation | answered | observed behaviour |
 | 2 | Which actions sit on the video and what do they do? | UI observation | answered | observed behaviour |
 | 3 | How do tap / double-tap / long-press behave? | UI observation | answered | observed behaviour |
-| 4 | How does the app make the next video start instantly? | static code (player setup, preload) + runtime traffic | **unresolved** (design chosen independently) | inference |
+| 4 | How does the app make the next video start instantly? | static code (player pool, preload config) | **answered (static)**; production values unresolved | REA evidence + inference |
 | 5 | How is the feed ranked? | server-side; not recoverable from the client | **out of reach** | the client only sees ranked pages |
 | 6 | How are comments structured? | UI observation | answered | observed behaviour |
 | 7 | What does sharing offer? | UI observation | answered | observed behaviour |
 | 8 | How does discovery/search work? | UI observation | answered | observed behaviour |
-| 9 | How does capture work (segments, timer, flip, upload)? | UI observation; static code for encoder settings | partially answered | observed behaviour; encoder details unresolved |
+| 9 | How does capture work (segments, timer, flip, upload)? | UI observation; static code for encoder settings | partially answered; encoder settings **unresolved** | observed behaviour |
 | 10 | What is on a profile? | UI observation | answered | observed behaviour |
 | 11 | What does the inbox show? | UI observation | answered | observed behaviour |
-| 12 | Which Android components, permissions and libraries does the official client use? | `inspect_android_package` manifest + class inventory | **unresolved** | needs APK |
-| 13 | How does the client authenticate and sign API requests? | out of scope | **not investigated, by design** | see playbook boundaries |
+| 12 | Which Android components, permissions and libraries does the official client use? | manifest + class inventory | **answered (static)** | REA evidence + dex index |
+| 13 | How does the client authenticate and sign API requests? | out of scope | **not investigated, by design** | see [rea-playbook.md](rea-playbook.md#boundaries) |
+
+## Provenance
+
+| Item | Value |
+|---|---|
+| Target | TikTok `com.zhiliaoapp.musically` 47.4.42 (versionCode 2024704420), arm64-v8a, standalone base APK, 347 MB |
+| Source | APK supplied by the project owner (downloaded from a public mirror), transferred via a private link |
+| APK SHA-256 | `36b952cd43f7a6708eb3b9cd16e144d69187b0467256a4b11811a4de0598a6a9` |
+| Signature | v1/v2/v3 verify (`apksigner`); one signer, DN `CN=musical.ly, OU=android, O=musical.ly Inc.`, certificate SHA-256 `9041803e91bcb814b4b4399fb5c85a91640b755e5e8ba76813814bf4cf2ab5ba`. Not compared against an independent reference of the official certificate. |
+| Tools | REA 6.5.0 CLI, jadx-headless-mcp 0.7.1 (SHA-256 `6e5eacf5…ff75`, verified against REA's pinned digest), OpenJDK 21 |
+| Method | The full APK (53 dex files, 438,323 classes) exceeded the memory available to JADX in the analysis sandbox, so REA ran on **derived slices**: the original `AndroidManifest.xml` and `resources.arsc` plus selected dex members, chosen with a class→dex index built from the dex headers. A slice only contains the classes it was built from, so cross-slice references are not covered. |
+| Slices | `manifest-slice.apk` (manifest + resources + classes41.dex) `82a8eedd…c337`; `q3-preload.apk` (classes24, 4, 2, 18, 39) `8b06b912…1b4e` |
 
 ## Findings and design decisions
 
@@ -70,16 +79,48 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
 - **Loop:** `detectTapGestures` in `VideoPage`, `HeartBurst` animation,
   `VideoOptionsSheet`. Double tap while signed out routes to sign-in.
 
-### 4. Instant start (unresolved — independent design)
-- **Inference:** near-zero start latency implies the neighbouring videos are
-  prepared and their first bytes cached before the swipe.
-- **Unknown:** the official client's actual player, buffer sizes and preload
-  policy (question for REA: see playbook Q3).
-- **Loop:** three pooled ExoPlayers (previous / current / next, slot = page % 3)
-  prepared and paused on their first frame, one shared 512 MB Media3
-  `SimpleCache`, `CacheWriter` prefetch of the first ~1.5 MB of the next three
-  videos, and a small `DefaultLoadControl` buffer tuned for short clips
-  (`player/`).
+### 4. Instant start
+Static observations (REA, `q3-preload.apk`):
+- **Player reuse pool.** A player-kit config declares a player pool size, a
+  pool keep-alive time and separate reuse switches for on-demand video and live
+  (`PlayerReuseConfig`, `ev_cdc55d86…58ed`).
+- **Preloading is a list of tasks.** The preload strategy holds a list of
+  tasks, each with a *count* of videos, an *offset* from the current position,
+  a *size* and a *progress* value (`PreloadStrategyConfig` `ev_d37ee66e…db12b`,
+  `PreloadTask` `ev_52dbae4a…6cfd`). A task's size is expressed in KB; an
+  unset size falls back to about 10 MB (`getVideoPreloadSize`,
+  `ev_d2d266d5…eeb2`).
+- **Built-in fallback strategy:** exactly one task with the no-argument
+  defaults, i.e. preload **one** video ahead with progress 100 and the size
+  fallback (`<clinit>` of the defaults holder `ev_e9ebf7a7…aba1`; `PreloadTask`
+  constructors `ev_51ae578b…2ba0`, `ev_1fe217cc…7b`).
+- **Buffer- and network-aware gating.** The same strategy carries a "secure"
+  and a "danger" buffer threshold and lower/upper network-bandwidth bounds; a
+  separate buffer-threshold model has "remain to start" / "remain to stop"
+  values, a cache duration and a network-speed factor, scoped to video-duration
+  ranges (`BufferThreshold` `ev_3b768e78…c6bd`).
+- **Predictive prefetch beyond video.** A feed model carries probabilities,
+  thresholds and median times for preloading a video's *comments* and its
+  creator's *profile* (`feed.model.Preload`, `ev_9eec4cae…aa5e64`).
+
+Inferences:
+- Preloading the next video is suspended while the current video's buffer is
+  below the danger threshold and resumes above the secure threshold; the
+  "remain to start/stop" values express the same idea in buffered time.
+- The production parameters are delivered remotely (the classes live in `ab`
+  and `experiment` packages and the defaults are only a fallback).
+
+Unknown: the production values, the playback engine internals (ByteDance's own
+engine, not ExoPlayer), and the cache size.
+
+**Loop:** keeps three pooled ExoPlayers (previous / current / next) and one
+512 MB Media3 cache, and changes prefetching to match the observed model:
+- prefetch is gated on the current player's buffered-ahead duration — start
+  when at least ~2.5 s is buffered (secure), cancel in-flight prefetches when
+  it drops below ~0.8 s (danger);
+- tasks: next video up to 2 MB, the one after up to 512 KB;
+- after a video has played for ~3 s (or on a long view), prefetch the first
+  page of its comments so the comments sheet opens without a spinner.
 
 ### 5. Ranking (out of reach)
 - A recommender runs server-side; a client binary cannot reveal it.
@@ -97,8 +138,13 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
 ### 7. Sharing
 - **Observed:** a share sheet with copy-link, system share and save-to-device;
   shares increment the visible count.
+- **Static (manifest):** 25 auto-verified app-link intent filters route the
+  vendor's web share URLs straight into the app.
 - **Loop:** `ShareSheet` with copy link (`/v/{id}` web page served by the Loop
-  server), Android share chooser and DownloadManager save.
+  server), Android share chooser and DownloadManager save. Because a Loop
+  server's host is chosen by whoever runs it, verified app links are not
+  possible; the share page offers an "Open in Loop" link using a `loop://video/{id}`
+  deep link that the app handles.
 
 ### 8. Discovery
 - **Observed:** a search entry point, trending hashtags with video rows,
@@ -112,12 +158,19 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
   (tap/hold to record, pause between segments) with a segmented progress bar
   and a maximum length; flip camera, flash, countdown timer; upload from the
   gallery; a post screen with caption, hashtags and mentions.
-- **Unknown:** the official encoder settings and any on-device effects pipeline.
+- **Static:** capture and export run on the vendor's own editing SDK
+  (`com.ss.android.vesdk`, 301 named classes) rather than CameraX; export
+  settings live in a `creative.compileconfig` package (encode parameters,
+  resolution levels). **Unresolved:** the REA inspection of those classes was
+  not run (the analysis session's permission policy stopped it).
+- **Static (manifest):** publishing runs in a foreground service of type
+  `dataSync`, so an upload continues when the user leaves the app.
 - **Loop:** CameraX `Recorder` with `Recording.pause()/resume()` so all segments
   land in one MP4 (no client-side concatenation), 60 s cap, 3 s timer, torch,
-  Photo Picker upload, multipart upload with progress (`ui/create/`). Audio
-  mixing of a chosen sound is not implemented; the sound is attached as
-  metadata.
+  Photo Picker upload, multipart upload with progress (`ui/create/`). Planned
+  from the finding: run the upload in a `dataSync` foreground service so it
+  survives backgrounding. Audio mixing of a chosen sound is not implemented;
+  the sound is attached as metadata.
 
 ### 10. Profiles
 - **Observed:** avatar, handle, following/followers/likes counters, edit or
@@ -132,13 +185,36 @@ observed vs. inferred vs. unknown, and the design choice Loop made.
 - **Loop:** `ui/inbox/` + `/api/notifications*`; removing a like/follow/comment
   removes its notification.
 
-### 12–13. Static questions
-Not answered in this version; see the [playbook](rea-playbook.md).
+### 12. Components, permissions and libraries
+Manifest (REA `inspect_android_package`, `ev_7cb41969…becc`):
+- minSdk 23, targetSdk 36; `largeHeap` enabled; 497 activities, 88 services,
+  52 receivers, 11 providers.
+- The launcher alias targets the main activity, which declares
+  **picture-in-picture** support (as do the live player and one shell activity).
+- 17 foreground services; relevant to Loop: background/feed audio playback
+  (`mediaPlayback`) with a media session, and publishing (`dataSync`).
+- 64 permissions, including camera, microphone, media reads, notifications,
+  location, contacts and Bluetooth; most serve features outside Loop's scope
+  (live streaming, payments, calls, casting).
+
+Library inventory (class→dex index from the dex headers; static presence only,
+and 76% of class names are obfuscated, so absence is not proven):
+
+| Concern | Present | Not found |
+|---|---|---|
+| Video playback | ByteDance engine (`com.ss.ttvideoengine`, `com.ss.ttm`) | ExoPlayer / Media3 |
+| Capture & editing | ByteDance VESDK (`com.ss.android.vesdk`, `medialib`) | CameraX |
+| Networking | TTNet over Chromium Cronet (`org.chromium.net`); a few OkHttp classes | Retrofit |
+| Images | Fresco image pipeline | Glide, Coil |
+| UI | Views, RecyclerView, ViewPager2, Lynx; some Compose runtime | Material 3 Compose |
+| Data | Wire (protobuf), Gson, Room | kotlinx.serialization |
+
+**Loop:** Media3 and CameraX are open-source substitutes for proprietary
+engines; Compose replaces the view/Lynx stack. Planned from the manifest:
+picture-in-picture for the full-screen pager, and a foreground upload service.
 
 ## Residual unknowns
 
-- Player/preload parameters of the official client (affects tuning only).
-- Exact encoder settings for capture.
-- Whether the official client uses any platform features Loop lacks (for
-  example picture-in-picture or background audio) — answerable from the
-  manifest with `inspect_android_package`.
+- Production values of the preload and buffer thresholds (remote A/B config).
+- Capture/export encoder settings (question 9; the REA inspection was not run).
+- Playback engine internals and cache sizing.
