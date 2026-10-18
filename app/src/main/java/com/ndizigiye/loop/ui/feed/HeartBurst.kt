@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.ndizigiye.loop.ui.theme.LoopColors
@@ -46,6 +47,9 @@ private val OvershootEasing = Easing { fraction ->
     val t = fraction - 1f
     t * t * ((OVERSHOOT_TENSION + 1f) * t + OVERSHOOT_TENSION) + 1f
 }
+
+/** Test tag of a floating heart: it is decorative, so it has no text or description to find it by. */
+internal const val FLOATING_HEART_TAG = "floating_heart"
 
 internal class Heart(val id: Long, val position: Offset, val tiltDegrees: Float)
 
@@ -121,6 +125,7 @@ private fun FloatingHeart(heart: Heart, onFinished: () -> Unit) {
                 )
             }
             .size(HeartSize)
+            .testTag(FLOATING_HEART_TAG)
             .graphicsLayer {
                 val grow = 1f + 0.15f * rise.value
                 scaleX = scale.value * grow

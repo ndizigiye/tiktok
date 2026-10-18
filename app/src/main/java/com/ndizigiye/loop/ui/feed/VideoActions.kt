@@ -10,6 +10,7 @@ import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.data.remote.userMessage
 import com.ndizigiye.loop.di.AppContainer
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
+import com.ndizigiye.loop.ui.common.rememberMessageScope
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 import com.ndizigiye.loop.ui.navigation.LoopNavigator
@@ -21,7 +22,8 @@ import kotlinx.coroutines.withContext
 /**
  * The account-bound actions of a feed page. Each asks signed-out viewers to log in
  * first, updates the shared InteractionStore through the repositories and reports
- * failures in the app snackbar.
+ * failures in the app snackbar. Messages are shown in [messageScope]: removing a video
+ * can empty the feed, which then leaves composition and cancels [scope].
  */
 @Stable
 internal class VideoActions(
@@ -29,6 +31,7 @@ internal class VideoActions(
     private val navigator: LoopNavigator,
     private val snackbarHostState: SnackbarHostState,
     private val scope: CoroutineScope,
+    private val messageScope: CoroutineScope,
 ) {
     fun toggleLike(video: VideoDto) {
         if (!navigator.requireAuth()) return
@@ -66,7 +69,7 @@ internal class VideoActions(
             withContext(NonCancellable) { container.videoRepository.notInterested(video.id) }
                 .onSuccess {
                     onRemoved(video.id)
-                    snackbarHostState.showSnackbar("Got it. You'll see fewer videos like this.")
+                    showMessage("Got it. You'll see fewer videos like this.")
                 }
                 .onFailure { showError(it) }
         }
@@ -78,14 +81,14 @@ internal class VideoActions(
             withContext(NonCancellable) { container.videoRepository.delete(video.id) }
                 .onSuccess {
                     onRemoved(video.id)
-                    snackbarHostState.showSnackbar("Video deleted")
+                    showMessage("Video deleted")
                 }
                 .onFailure { showError(it) }
         }
     }
 
     fun showMessage(message: String) {
-        scope.launch { snackbarHostState.showSnackbar(message) }
+        messageScope.launch { snackbarHostState.showSnackbar(message) }
     }
 
     private fun setLiked(video: VideoDto, liked: Boolean) {
@@ -94,8 +97,8 @@ internal class VideoActions(
         }
     }
 
-    private suspend fun showError(error: Throwable) {
-        snackbarHostState.showSnackbar(error.userMessage())
+    private fun showError(error: Throwable) {
+        showMessage(error.userMessage())
     }
 }
 
@@ -105,7 +108,8 @@ internal fun rememberVideoActions(): VideoActions {
     val navigator = LocalNavigator.current
     val snackbarHostState = LocalSnackbarHostState.current
     val scope = rememberCoroutineScope()
-    return remember(container, navigator, snackbarHostState, scope) {
-        VideoActions(container, navigator, snackbarHostState, scope)
+    val messageScope = rememberMessageScope()
+    return remember(container, navigator, snackbarHostState, scope, messageScope) {
+        VideoActions(container, navigator, snackbarHostState, scope, messageScope)
     }
 }

@@ -18,6 +18,8 @@ repo/
 ├── app/                                    Android app (Kotlin, Compose, Media3, CameraX)
 ├── server/                                 separate Gradle build: Ktor backend (SQLite or Supabase Postgres,
 │                                           local disk or Supabase Storage); supabase/migrations/ for the schema
+├── scripts/                                e2e-server.sh: a seeded server for the end-to-end tests,
+│                                           device-screenshots.sh: screenshots of the device tests (see Tests)
 └── docs/                                   api.md, architecture.md, feature-analysis.md, rea-playbook.md,
                                             supabase-live-check.md
 ```
@@ -32,6 +34,9 @@ Media3 1.5.1, CameraX 1.4.1, Coil 3.0.4, Retrofit 2.11.0 with the official
 kotlinx-serialization converter, OkHttp 4.12.0, kotlinx-serialization 1.7.3,
 coroutines 1.9.0. Server: Ktor 3.0.3, Exposed 0.57.0, sqlite-jdbc 3.47.1.0,
 PostgreSQL JDBC 42.7.14, HikariCP 7.1.0, logback 1.5.12.
+Tests: JUnit 4.13.2, kotlinx-coroutines-test, MockWebServer 4.12.0, Robolectric 4.14.1,
+Compose ui-test (BOM), androidx.test core 1.6.1, ext-junit 1.2.1, runner 1.6.2 and rules 1.6.1,
+Espresso 3.6.1, UiAutomator 2.3.0.
 
 No annotation processing (no KSP/kapt, no Hilt, no Room): dependency injection
 is a hand-written `AppContainer`, persistence is `SharedPreferences`, and the
@@ -369,3 +374,61 @@ users and generates demo clips with ffmpeg's built-in test sources (no third-par
 media), stored through the same `MediaStore`. Setup, configuration and operations are
 in `server/README.md` (section "Supabase"); `docs/supabase-live-check.md` verifies a
 deployment against the live project.
+
+## Tests
+
+- `./gradlew :app:testDebugUnitTest`: JVM unit tests of the data layer and ViewModels
+  (MockWebServer plays the server). `./gradlew -p server test`: the server's integration tests.
+- End-to-end, on the JVM: `app/src/test/java/com/ndizigiye/loop/e2e/` runs the real app
+  (MainActivity, LoopApp, repositories, OkHttp) on Robolectric 4.14 (SDK 35, native graphics)
+  with Compose UI tests against a live, seeded Loop server, and checks every UI action against
+  the server over plain HTTP, using a second account for the inbox. The tests are skipped
+  unless the Gradle property `loop.e2e.baseUrl` names a server:
+
+  ```sh
+  URL=$(scripts/e2e-server.sh start)          # --postgres (default with a local cluster) or --sqlite
+  ./gradlew :app:testDebugUnitTest -Ploop.e2e.baseUrl=$URL
+  scripts/e2e-server.sh stop
+  ```
+
+  `scripts/e2e-server.sh` builds the server, starts it on a free port (from 18080) with a fresh
+  data directory under `/tmp/claude-0/loop-e2e` and `LOOP_SEED=true`, waits for demo seeding,
+  and with `--postgres` uses a throwaway database (migrations applied) on the local PostgreSQL
+  cluster; `stop` removes all of it. Video decoding (Media3), recording (CameraX),
+  picture-in-picture and the upload's foreground service don't run on Robolectric; the suite
+  only checks that the app survives them there, and they are verified on an emulator.
+- End-to-end, on a device: `app/src/androidTest/java/com/ndizigiye/loop/e2e/` covers what the
+  JVM can't: real playback (read from the page's ExoPlayer: playing, position, decoded frames,
+  repeat), taps, double taps and scrubbing on the video, a comment, sign-up and log-in, the
+  camera's permission dialogs (UiAutomator), the lens flip (the open camera, as the camera
+  service reports it), the timer's countdown, a take recorded in two segments with CameraX and
+  posted while the app is in the background (the upload's foreground service, checked with
+  `dumpsys`), `loop://video/{id}` links started from the shell, picture-in-picture, and
+  recovery from an unreachable server. Both suites share the server client, the forwarding
+  proxy and the feed helpers in `app/src/sharedTest/java` (a source directory of `test` and
+  `androidTest`); each has its own `waitFor`. The server must be reachable from the device, by
+  default at the app's `http://10.0.2.2:8080/` (the emulator's alias for the host):
+
+  ```sh
+  scripts/e2e-server.sh start --port 8080
+  scripts/device-screenshots.sh build/e2e-screens &   # optional: a PNG per saveScreenshot() step
+  ./gradlew :app:connectedDebugAndroidTest           # another server: -Pandroid.testInstrumentationRunnerArguments.loopBaseUrl=<url>
+  kill %1; scripts/e2e-server.sh stop
+  ```
+
+  `CreateDeviceTest` expects the camera and microphone permissions not to be granted yet (as
+  after installing); the picture-in-picture test is skipped on devices without the
+  `android.software.picture_in_picture` feature. Screenshots are taken from the host because
+  capturing on a software-emulated device takes over a minute while video plays.
+
+  On a software-emulated Automated Test Device image (no KVM), prepare the device first:
+  `adb shell setprop debug.hwui.drawing_enabled 1` (ATD images skip drawing app windows, so
+  screenshots would show only video surfaces), `adb shell am set-debug-app --persistent
+  com.ndizigiye.loop` (Android 11 otherwise ends an instrumented app as soon as one input event
+  waits 5 s, e.g. behind a slow first frame), `adb shell settings put secure long_press_timeout
+  1500` (so slow devices don't turn taps into long presses), animation scales 0, and optionally
+  `adb shell wm size 540x1170; adb shell wm density 220` (same dp layout, a quarter of the
+  pixels); `adb shell am clear-debug-app` undoes the debug flag afterwards. ATD images have no
+  picture-in-picture, so that test is skipped there, and under heavy load their `audioserver`
+  can be aborted by its own watchdog, after which every audio call of the app waits for it;
+  `adb root && adb shell start audioserver` brings it back.

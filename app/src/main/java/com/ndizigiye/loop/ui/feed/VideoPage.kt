@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.PlaybackException
@@ -50,6 +51,17 @@ import com.ndizigiye.loop.ui.navigation.PictureInPictureVideo
 import com.ndizigiye.loop.ui.theme.LoopColors
 
 private val BottomScrim = Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))
+
+/**
+ * Test tag of the page showing [videoId]. A feed composes its neighbouring pages too, so
+ * their identical rail buttons can only be told apart by the page they belong to.
+ */
+internal fun videoPageTag(videoId: Long): String = VIDEO_PAGE_TAG_PREFIX + videoId
+
+internal const val VIDEO_PAGE_TAG_PREFIX = "video_page:"
+
+/** Test tag of a page's thumbnail, which shows until the video's first frame is on screen. */
+internal const val VIDEO_THUMBNAIL_TAG = "video_thumbnail"
 
 /**
  * One full-screen video of a feed. Layers, bottom to top: the video, its thumbnail
@@ -109,7 +121,8 @@ internal fun VideoPage(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .testTag(videoPageTag(video.id)),
     ) {
         VideoSurface(player = player, modifier = Modifier.fillMaxSize(), fill = fill)
 
@@ -125,7 +138,9 @@ internal fun VideoPage(
                     model = thumbnailUrl,
                     contentDescription = null,
                     contentScale = if (fill) ContentScale.Crop else ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag(VIDEO_THUMBNAIL_TAG),
                 )
             }
         }

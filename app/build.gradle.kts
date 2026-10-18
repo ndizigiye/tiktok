@@ -1,5 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+/** Gradle property and test system property naming the Loop server of the end-to-end tests. */
+val e2eBaseUrlProperty = "loop.e2e.baseUrl"
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -20,6 +23,17 @@ android {
 
         // Android emulator alias for the host machine; changeable at runtime in Settings.
         buildConfigField("String", "DEFAULT_BASE_URL", "\"http://10.0.2.2:8080/\"")
+
+        // Device end-to-end tests (src/androidTest) against a live Loop server, by default the
+        // app's DEFAULT_BASE_URL; another with -Pandroid.testInstrumentationRunnerArguments.loopBaseUrl=<url>.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    sourceSets {
+        // The end-to-end harness that the JVM suite (src/test) and the device suite (src/androidTest)
+        // share: the server client, the forwarding proxy and the feed helpers.
+        getByName("test").java.srcDir("src/sharedTest/java")
+        getByName("androidTest").java.srcDir("src/sharedTest/java")
     }
 
     buildTypes {
@@ -41,6 +55,26 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric UI tests inflate the real resources (themes, Media3's PlayerView layout).
+            isIncludeAndroidResources = true
+            all { test ->
+                test.maxHeapSize = "2g"
+                // The end-to-end suite (com.ndizigiye.loop.e2e) runs only against a live server:
+                // ./gradlew :app:testDebugUnitTest -Ploop.e2e.baseUrl=http://127.0.0.1:18080/
+                // (scripts/e2e-server.sh starts one). Without the property those tests are skipped.
+                val e2eBaseUrl = providers.gradleProperty(e2eBaseUrlProperty).orNull
+                if (!e2eBaseUrl.isNullOrBlank()) {
+                    test.systemProperty(e2eBaseUrlProperty, e2eBaseUrl)
+                    // The server is not a task input: never skip an end-to-end run or take it from the cache.
+                    test.outputs.upToDateWhen { false }
+                    test.outputs.cacheIf { false }
+                }
+            }
+        }
     }
 
     packaging {
@@ -108,4 +142,20 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.ext.junit)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation(libs.okhttp.mockwebserver)
 }

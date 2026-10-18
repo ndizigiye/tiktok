@@ -2,6 +2,7 @@ package com.ndizigiye.loop.ui.discover
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -56,11 +57,11 @@ internal fun SoundCoverDisc(
     val rotation = remember { Animatable(0f) }
     LaunchedEffect(rotating) {
         if (!rotating) return@LaunchedEffect
-        while (true) {
-            val start = rotation.value % 360f
-            rotation.snapTo(start)
-            rotation.animateTo(start + 360f, tween(TURN_MS, easing = LinearEasing))
-        }
+        // One infinite animation rather than a loop of finite ones, so Compose knows it never
+        // ends (InfiniteAnimationPolicy): otherwise UI tests never see this screen idle.
+        val start = rotation.value % 360f
+        rotation.snapTo(start)
+        rotation.animateTo(start + 360f, infiniteRepeatable(tween(TURN_MS, easing = LinearEasing)))
     }
 
     val labelSize = size * 0.64f
