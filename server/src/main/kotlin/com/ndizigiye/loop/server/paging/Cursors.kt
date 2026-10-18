@@ -28,10 +28,15 @@ object Cursors {
     /** Position after the row with sort key [key] and id [id] in a keyset-ordered list. */
     data class Key(val key: Long, val id: Long)
 
+    /** Position after the row with [score], sort key [key] and id [id] in a ranking (see `RankedOrder`). */
+    data class Ranked(val score: Long, val key: Long, val id: Long)
+
     /** For You position: [offset] within the pass ranked with [seed] (see `ForYouService`). */
     data class Feed(val seed: Long, val offset: Int, val avoidAuthor: Long)
 
     fun key(key: Long, id: Long): String = encode("k", key, id)
+
+    fun ranked(cursor: Ranked): String = encode("r", cursor.score, cursor.key, cursor.id)
 
     fun offset(offset: Int): String = encode("o", offset.toLong())
 
@@ -40,6 +45,11 @@ object Cursors {
     fun parseKey(cursor: String?): Key? = cursor?.let {
         val (a, b) = decode(it, "k", 2)
         Key(a, b)
+    }
+
+    fun parseRanked(cursor: String?): Ranked? = cursor?.let {
+        val (score, key, id) = decode(it, "r", 3)
+        Ranked(score, key, id)
     }
 
     fun parseOffset(cursor: String?): Int = cursor?.let {

@@ -69,7 +69,7 @@ fun Route.socialRoutes(services: LoopServices) {
                 call.respond(services.notifications.unreadCount(call.userId()))
             }
             post("/read") {
-                services.notifications.markAllRead(call.userId())
+                services.notifications.markRead(call.userId(), call.idQuery("upTo"))
                 call.respond(HttpStatusCode.NoContent)
             }
         }

@@ -3,6 +3,7 @@ package com.ndizigiye.loop.server
 import com.ndizigiye.loop.api.CommentDto
 import com.ndizigiye.loop.api.CreateCommentRequest
 import com.ndizigiye.loop.api.ToggleResultDto
+import com.ndizigiye.loop.server.paging.Cursors
 import io.ktor.client.call.body
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.delete
@@ -80,6 +81,41 @@ class CommentTest {
 
         val ordered = allPages<CommentDto>("/api/videos/${video.id}/comments", limit = 2)
         assertEquals(listOf(liked.id, newest.id, old.id), ordered.map { it.id })
+    }
+
+    @Test
+    fun `top-level comment pages neither skip nor repeat comments deleted in between`() = loopTest {
+        val creator = register("keyset")
+        val fans = (1..3).map { register("keyset$it") }
+        val video = postVideo(creator)
+        val c = (0..6).map { comment(fans[it % 3], video.id, "comment $it") }
+        listOf(c[1] to fans.take(2), c[4] to fans.take(2), c[5] to fans.take(1)).forEach { (comment, likers) ->
+            likers.forEach { client.put("/api/comments/${comment.id}/like") { bearerAuth(it.token) } }
+        }
+        // Equal timestamps, so the id breaks every tie between equally liked comments.
+        assertEquals(7, execute("UPDATE comments SET created_at = 1700000000000 WHERE video_id = ${video.id}"))
+        val expected = listOf(c[4], c[1], c[5], c[6], c[3], c[2], c[0]).map { it.id }
+        val path = "/api/videos/${video.id}/comments"
+        assertEquals(expected, allPages<CommentDto>(path, limit = 2).map { it.id })
+
+        suspend fun page(cursor: String?) = page<CommentDto>("$path?limit=3" + (cursor?.let { "&cursor=$it" } ?: ""))
+        suspend fun delete(comment: Long) {
+            val response = client.delete("/api/comments/$comment") { bearerAuth(creator.token) }
+            assertEquals(HttpStatusCode.NoContent, response.status)
+        }
+
+        val first = page(null)
+        assertEquals(expected.subList(0, 3), first.items.map { it.id })
+        delete(first.items.last().id) // the comment the cursor points after
+        delete(first.items.first().id)
+        val second = page(first.nextCursor)
+        assertEquals(expected.subList(3, 6), second.items.map { it.id }, "nothing skipped after deleting loaded ones")
+        delete(second.items[1].id)
+        val third = page(second.nextCursor)
+        assertEquals(expected.subList(6, 7), third.items.map { it.id }, "nothing repeated or skipped")
+        assertNull(third.nextCursor)
+
+        assertError(client.get("$path?cursor=${Cursors.offset(3)}"), HttpStatusCode.BadRequest, "validation")
     }
 
     @Test

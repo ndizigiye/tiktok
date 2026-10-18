@@ -4,7 +4,6 @@ import com.ndizigiye.loop.api.LoginRequest
 import com.ndizigiye.loop.api.RegisterRequest
 import com.ndizigiye.loop.api.UpdateProfileRequest
 import com.ndizigiye.loop.server.LoopServices
-import com.ndizigiye.loop.server.media.MediaKind
 import com.ndizigiye.loop.server.media.UploadSpec
 import com.ndizigiye.loop.server.media.receiveUpload
 import com.ndizigiye.loop.server.plugins.JWT_AUTH
@@ -39,7 +38,7 @@ fun Route.accountRoutes(services: LoopServices) {
             }
             post("/avatar") {
                 val userId = call.userId()
-                val upload = call.receiveUpload(UploadSpec.AVATAR) { services.storage.newFile(MediaKind.AVATARS, it) }
+                val upload = call.receiveUpload(UploadSpec.AVATAR, services.staging::newFile)
                 call.respond(services.uploads.replaceAvatar(userId, upload))
             }
             get("/bookmarks") {

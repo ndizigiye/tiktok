@@ -16,6 +16,8 @@ import com.ndizigiye.loop.server.db.VideoHashtags
 import com.ndizigiye.loop.server.db.VideoLikes
 import com.ndizigiye.loop.server.db.Videos
 import com.ndizigiye.loop.server.media.MediaKind
+import com.ndizigiye.loop.server.media.MediaStore
+import com.ndizigiye.loop.server.media.url
 import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
@@ -29,8 +31,9 @@ import org.jetbrains.exposed.sql.sum
  * Builds wire DTOs for batches of rows, filling counts with grouped aggregate queries so
  * they are always consistent with the relation tables. Call inside a transaction.
  * List results keep the order of the requested ids and skip ids that no longer exist.
+ * Media URLs come from [media]: server-relative for local files, absolute for Supabase Storage.
  */
-object DtoAssembler {
+class DtoAssembler(private val media: MediaStore) {
     private val videoLikesJoin = VideoLikes.join(Videos, JoinType.INNER, VideoLikes.videoId, Videos.id)
     private val videoHashtagsJoin = VideoHashtags
         .join(Hashtags, JoinType.INNER, VideoHashtags.hashtagId, Hashtags.id)
@@ -53,7 +56,7 @@ object DtoAssembler {
                 username = row[Users.username],
                 displayName = row[Users.displayName],
                 bio = row[Users.bio],
-                avatarUrl = row[Users.avatarFile]?.let(MediaKind.AVATARS::url),
+                avatarUrl = row[Users.avatarFile]?.let { media.url(MediaKind.AVATARS, it) },
                 avatarColor = row[Users.avatarColor],
                 verified = row[Users.verified],
                 followerCount = followers[id] ?: 0,
@@ -93,8 +96,8 @@ object DtoAssembler {
                 author = authors[row[Videos.authorId].value] ?: return@mapNotNull null,
                 caption = row[Videos.caption],
                 hashtags = hashtags[id].orEmpty(),
-                videoUrl = MediaKind.VIDEOS.url(row[Videos.videoFile]),
-                thumbnailUrl = row[Videos.thumbFile]?.let(MediaKind.THUMBS::url),
+                videoUrl = media.url(MediaKind.VIDEOS, row[Videos.videoFile]),
+                thumbnailUrl = row[Videos.thumbFile]?.let(::thumbnailUrl),
                 width = row[Videos.width],
                 height = row[Videos.height],
                 durationMs = row[Videos.durationMs],
@@ -110,6 +113,9 @@ object DtoAssembler {
             )
         }
     }
+
+    /** URL of the stored thumbnail [name] (`Videos.thumbFile`). */
+    fun thumbnailUrl(name: String): String = media.url(MediaKind.THUMBS, name)
 
     fun sound(id: Long): SoundDto? = sounds(listOf(id))[id]
 
@@ -127,7 +133,7 @@ object DtoAssembler {
                     id = id,
                     title = row[Sounds.title],
                     authorName = row[Sounds.authorName],
-                    coverUrl = covers[id] ?: row[Users.avatarFile]?.let(MediaKind.AVATARS::url),
+                    coverUrl = covers[id] ?: row[Users.avatarFile]?.let { media.url(MediaKind.AVATARS, it) },
                     videoCount = videoCounts[id] ?: 0,
                 )
             }
@@ -192,7 +198,7 @@ object DtoAssembler {
             .orderBy(Videos.createdAt to SortOrder.ASC, Videos.id to SortOrder.ASC)
             .toList()
             .groupBy { it[Videos.soundId].value }
-            .mapValues { (_, rows) -> MediaKind.THUMBS.url(rows.first()[Videos.thumbFile]!!) }
+            .mapValues { (_, rows) -> thumbnailUrl(rows.first()[Videos.thumbFile]!!) }
 
     private fun replyCounts(commentIds: Collection<Long>): Map<Long, Long> {
         val count = Comments.id.count()

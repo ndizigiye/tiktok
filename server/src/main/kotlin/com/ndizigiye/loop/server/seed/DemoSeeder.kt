@@ -15,6 +15,7 @@ import com.ndizigiye.loop.server.db.VideoLikes
 import com.ndizigiye.loop.server.db.Videos
 import com.ndizigiye.loop.server.db.ViewHistory
 import com.ndizigiye.loop.server.media.MediaKind
+import com.ndizigiye.loop.server.media.MediaObject
 import com.ndizigiye.loop.server.media.VideoProbe
 import com.ndizigiye.loop.server.service.NewVideo
 import com.ndizigiye.loop.server.service.Notifier
@@ -35,28 +36,37 @@ import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
 import org.slf4j.LoggerFactory
-import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 
 /**
  * Fills an empty database with fictional demo creators, generated clips and social activity.
  *
- * Every step checks what already exists (users by name, clips by file, media files on disk),
- * so an interrupted run resumes where it stopped. Clips render in parallel, up to one ffmpeg
+ * Every step checks which rows already exist (users by name, clips by file name, avatars), so an
+ * interrupted run resumes where it stopped. Media renders locally into [LoopServices.staging] and
+ * goes to the media store under fixed names (`videos/demo-01.mp4`, `avatars/demo-<user>.jpg`),
+ * replacing whatever an interrupted run stored. Clips render in parallel, up to one ffmpeg
  * process per CPU, and each clip is inserted with its likes and comments as soon as it is
- * ready, so the feed fills while the server is already serving.
+ * stored, so the feed fills while the server is already serving.
  */
-class DemoSeeder(private val services: LoopServices) {
+class DemoSeeder(
+    private val services: LoopServices,
+    /** The clips to create; tests pass a few. */
+    private val clips: List<DemoClip> = DemoContent.clips,
+) {
     private val log = LoggerFactory.getLogger(DemoSeeder::class.java)
     private val db = services.db
-    private val storage = services.storage
+    private val store = services.media
+    private val staging = services.staging
     private val renderer = ClipRenderer(services.tools)
 
     suspend fun seedIfNeeded() {
         try {
             val state = db.tx { MetaStore.get(STATE_KEY) }
-            if (state == DONE) return
+            if (state == DONE) {
+                log.info("Demo data was seeded before; demo seeding skipped.")
+                return
+            }
             if (state == null && db.tx { !Users.selectAll().empty() }) {
                 log.info("Database already has accounts; demo seeding skipped.")
                 return
@@ -149,13 +159,18 @@ class DemoSeeder(private val services: LoopServices) {
                 Users.select(Users.avatarFile).where { Users.id eq userId }.single()[Users.avatarFile] != null
             }
             if (hasAvatar) return@forEach
-            val file = File(storage.dir(MediaKind.AVATARS), "demo-${user.username.replace('.', '-')}.jpg")
-            val error = if (file.isFile) null else renderer.renderAvatar(colors, index + 1, file)
-            if (error != null) {
-                log.warn("Could not render the avatar of {}: {}", user.username, error)
-                return@forEach
+            val avatar = MediaObject(MediaKind.AVATARS, "demo-${user.username.replace('.', '-')}.jpg")
+            val file = staging.newFile("jpg")
+            try {
+                renderer.renderAvatar(colors, index + 1, file)?.let { error ->
+                    log.warn("Could not render the avatar of {}: {}", user.username, error)
+                    return@forEach
+                }
+                store.put(avatar, file, replace = true)
+            } finally {
+                file.delete()
             }
-            db.tx { Users.update({ Users.id eq userId }) { it[avatarFile] = file.name } }
+            db.tx { Users.update({ Users.id eq userId }) { it[avatarFile] = avatar.name } }
         }
     }
 
@@ -178,7 +193,7 @@ class DemoSeeder(private val services: LoopServices) {
     /** Renders and inserts every clip that is not in the database yet; returns how many were added. */
     private suspend fun seedClips(users: Map<String, Long>, sounds: Map<String, Long>, now: Long): Int {
         val existing = db.tx { Videos.select(Videos.videoFile).mapTo(HashSet()) { it[Videos.videoFile] } }
-        val pending = DemoContent.clips.filter { it.fileName !in existing }
+        val pending = clips.filter { it.fileName !in existing }
         if (pending.isEmpty()) return 0
         val parallelism = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
         log.info("Generating {} demo clips with ffmpeg ({} at a time)...", pending.size, parallelism)
@@ -188,7 +203,7 @@ class DemoSeeder(private val services: LoopServices) {
         coroutineScope {
             pending.forEach { clip ->
                 launch {
-                    val media = permits.withPermit { prepare(clip) }
+                    val media = prepare(clip, permits)
                     if (media != null) {
                         db.tx { insertClip(clip, media, users, sounds, now) }
                         added.incrementAndGet()
@@ -201,21 +216,33 @@ class DemoSeeder(private val services: LoopServices) {
         return added.get()
     }
 
-    private class ClipMedia(val file: File, val thumbnail: File?, val probe: VideoProbe?)
+    private class ClipMedia(val video: MediaObject, val thumbnail: MediaObject?, val probe: VideoProbe?)
 
-    /** Renders the clip and its thumbnail unless they exist already. */
-    private suspend fun prepare(clip: DemoClip): ClipMedia? {
-        val file = File(storage.dir(MediaKind.VIDEOS), clip.fileName)
-        if (!file.isFile) {
-            val tone = clip.soundKey?.let { key -> DemoContent.sounds.single { it.key == key }.tone } ?: clip.tone
-            renderer.renderClip(clip, tone, file)?.let { error ->
-                log.warn("Could not render {}: {}", clip.fileName, error)
-                return null
+    /**
+     * Renders the clip, probes it and takes its thumbnail while holding one of [permits], then
+     * stores both files. Rendering is deterministic, so storing replaces any earlier copy.
+     */
+    private suspend fun prepare(clip: DemoClip, permits: Semaphore): ClipMedia? {
+        val file = staging.newFile("mp4")
+        val thumbnailFile = staging.newFile("jpg")
+        try {
+            val video = MediaObject(MediaKind.VIDEOS, clip.fileName)
+            val (probe, hasThumbnail) = permits.withPermit {
+                val tone = clip.soundKey?.let { key -> DemoContent.sounds.single { it.key == key }.tone } ?: clip.tone
+                renderer.renderClip(clip, tone, file)?.let { error ->
+                    log.warn("Could not render {}: {}", clip.fileName, error)
+                    return null
+                }
+                services.tools.probe(file) to services.tools.thumbnail(file, thumbnailFile)
             }
+            val thumbnail = MediaObject.thumbnailOf(video).takeIf { hasThumbnail }
+            store.put(video, file, replace = true)
+            thumbnail?.let { store.put(it, thumbnailFile, replace = true) }
+            return ClipMedia(video, thumbnail, probe)
+        } finally {
+            file.delete()
+            thumbnailFile.delete()
         }
-        val thumbnail = storage.thumbnailFor(file)
-        val hasThumbnail = thumbnail.isFile || services.tools.thumbnail(file, thumbnail)
-        return ClipMedia(file, thumbnail.takeIf { hasThumbnail }, services.tools.probe(file))
     }
 
     /** Inserts one clip with its views, likes, bookmarks, watch history and comments. */
@@ -226,7 +253,7 @@ class DemoSeeder(private val services: LoopServices) {
         val createdAt = now - clip.ageHours * HOUR_MS - random.nextLong(0, HOUR_MS)
         val videoId = services.videos.insertVideo(
             authorId,
-            NewVideo(media.file.name, media.thumbnail?.name, media.probe, clip.caption, clip.soundKey?.let(sounds::getValue)),
+            NewVideo(media.video.name, media.thumbnail?.name, media.probe, clip.caption, clip.soundKey?.let(sounds::getValue)),
             createdAt,
         )
         fun momentAfter(start: Long): Long = start + (random.nextDouble() * (now - start)).toLong()

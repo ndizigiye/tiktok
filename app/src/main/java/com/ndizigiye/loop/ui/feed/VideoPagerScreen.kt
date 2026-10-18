@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ndizigiye.loop.ui.common.EmptyBox
 import com.ndizigiye.loop.ui.common.rememberBackAction
@@ -31,8 +32,9 @@ private val TopScrim = Brush.verticalGradient(listOf(Color(0x59000000), Color.Tr
 
 /**
  * Full-screen pager over a list handed off by [sourceKey] (see VideoListHandoff),
- * opened at [startIndex]. Without that list it shows just [videoId]. Leaving the app
- * while a video plays here continues it in picture-in-picture.
+ * opened at [startIndex]. Without that list (after process death) it shows just the
+ * video that was on screen, or [videoId]. Leaving the app while a video plays here
+ * continues it in picture-in-picture.
  */
 @Composable
 fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
@@ -41,7 +43,8 @@ fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
         VideoPagerViewModel(
             source = sourceKey?.let { container.videoListHandoff.get(it) },
             startIndex = startIndex,
-            videoId = videoId,
+            routeVideoId = videoId,
+            savedStateHandle = createSavedStateHandle(),
             videoRepository = container.videoRepository,
             applicationScope = container.applicationScope,
         )
@@ -63,6 +66,7 @@ fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
             onViewed = viewModel::recordView,
             onRemove = viewModel::remove,
             modifier = Modifier.fillMaxSize(),
+            onSettled = viewModel::onSettled,
             initialPage = viewModel.initialPage,
             allowPictureInPicture = true,
             emptyContent = {

@@ -14,9 +14,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
- * The signed-in user's notifications. Every reload marks them all as read on the
- * server once the first page is in, while the loaded items keep the `read` flags
- * they arrived with, so the rows that were new stay highlighted.
+ * The signed-in user's notifications. Every reload marks them as read on the server
+ * once the first page is in, up to the newest one loaded (a notification arriving in
+ * the meantime stays unread), while the loaded items keep the `read` flags they
+ * arrived with, so the rows that were new stay highlighted.
  */
 class InboxViewModel(private val inboxRepository: InboxRepository) : ViewModel() {
 
@@ -60,8 +61,12 @@ class InboxViewModel(private val inboxRepository: InboxRepository) : ViewModel()
             val settled = paginator.state.first { !it.isLoading && !it.isRefreshing }
             _isPullRefreshing.value = false
             if (settled.error == null) {
-                inboxRepository.markAllRead()
-                inboxRepository.refreshUnreadCount()
+                val newest = settled.items.firstOrNull()
+                if (newest != null) {
+                    inboxRepository.markAllRead(upTo = newest.id)
+                } else {
+                    inboxRepository.refreshUnreadCount()
+                }
             }
         }
     }

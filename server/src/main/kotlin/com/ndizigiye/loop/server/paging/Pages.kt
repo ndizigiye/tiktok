@@ -5,6 +5,7 @@ import org.jetbrains.exposed.dao.id.EntityID
 import org.jetbrains.exposed.sql.Column
 import org.jetbrains.exposed.sql.ColumnSet
 import org.jetbrains.exposed.sql.Expression
+import org.jetbrains.exposed.sql.ExpressionWithColumnType
 import org.jetbrains.exposed.sql.Op
 import org.jetbrains.exposed.sql.Query
 import org.jetbrains.exposed.sql.SortOrder
@@ -39,13 +40,18 @@ class KeysetOrder(
         }
 
     /** Rows strictly after [cursor] in this order, or `null` for the first page. */
-    fun after(cursor: Key?): Op<Boolean>? = cursor?.let {
+    fun after(cursor: Key?): Op<Boolean>? = cursor?.let(::strictlyAfter)
+
+    /** Rows strictly after [position] in this order. */
+    fun strictlyAfter(position: Key): Op<Boolean> =
         if (descending) {
-            (key less it.key) or ((key eq it.key) and (id less it.id))
+            (key less position.key) or ((key eq position.key) and (id less position.id))
         } else {
-            (key greater it.key) or ((key eq it.key) and (id greater it.id))
+            (key greater position.key) or ((key eq position.key) and (id greater position.id))
         }
-    }
+
+    /** The row at [position] and every row after it in this order. */
+    fun atOrAfter(position: Key): Op<Boolean> = (id eq position.id) or strictlyAfter(position)
 
     /** The [id] values of the requested page of [source] rows matching [condition]. */
     fun ids(source: ColumnSet, condition: Op<Boolean>, page: PageRequest): RowPage<Long> {
@@ -60,7 +66,42 @@ class KeysetOrder(
     }
 }
 
-/** Offset pagination for rankings that change while scrolling (most liked, most viewed). */
+/**
+ * Keyset ordering on (score, sort key, id), all descending ("most liked, then newest"), where
+ * [score] is an aggregate of a grouped query, e.g. a like count. The cursor holds the last row's
+ * three values, so rows deleted between pages never shift the next page. A row whose score
+ * changes meanwhile can move across the cursor and be served twice or not at all.
+ */
+class RankedOrder(
+    val score: ExpressionWithColumnType<Long>,
+    private val key: Column<Long>,
+    private val id: Column<EntityID<Long>>,
+) {
+    private val ties = KeysetOrder(key, id)
+
+    val orderBy: Array<Pair<Expression<*>, SortOrder>>
+        get() = arrayOf(score to SortOrder.DESC, *ties.orderBy)
+
+    /** Rows strictly after [cursor] in this order, or `null` for the first page; a `HAVING` condition. */
+    fun after(cursor: Cursors.Ranked?): Op<Boolean>? = cursor?.let {
+        (score less it.score) or ((score eq it.score) and ties.strictlyAfter(Key(it.key, it.id)))
+    }
+
+    /**
+     * The [id] values of the requested page of [query]: a query grouped by [id] that selects
+     * [score], the sort key and [id], without ordering or limit (both are added here).
+     */
+    fun ids(query: Query, page: PageRequest): RowPage<Long> {
+        after(Cursors.parseRanked(page.cursor))?.let { condition -> query.having { condition } }
+        val rows = query.orderBy(*orderBy)
+            .limit(page.limit + 1)
+            .map { Cursors.Ranked(it[score], it[key], it[id].value) }
+            .toRowPage(page.limit, Cursors::ranked)
+        return RowPage(rows.rows.map(Cursors.Ranked::id), rows.nextCursor)
+    }
+}
+
+/** Offset pagination for rankings that change while scrolling (most viewed). */
 fun Query.offsetIds(id: Column<EntityID<Long>>, page: PageRequest): RowPage<Long> {
     val offset = Cursors.parseOffset(page.cursor)
     val ids = limit(page.limit + 1).offset(offset.toLong()).map { it[id].value }

@@ -15,21 +15,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** What a multipart endpoint accepts in its single file part. */
+/**
+ * What a multipart endpoint accepts in its single file part. The part's `Content-Type` decides
+ * the type; when it is missing or `application/octet-stream`, the file name's extension does.
+ */
 data class UploadSpec(
     val fileField: String,
     val maxBytes: Long,
     /** Accepted MIME type -> stored file extension. */
     val types: Map<String, String>,
+    /** Start of the `400 validation` message for anything else. */
     val label: String,
+    /** Accepted file name extension (lowercase) -> stored file extension. */
+    val extensions: Map<String, String> = types.values.associateWith { it },
 ) {
-    private val extensions: Set<String> = types.values.toSet()
-
     internal fun extensionFor(contentType: ContentType?, originalName: String?): String? {
         contentType?.withoutParameters()?.toString()?.lowercase()?.let { mime -> types[mime]?.let { return it } }
         val generic = contentType == null || contentType.match(ContentType.Application.OctetStream)
-        val fromName = originalName?.substringAfterLast('.', "")?.lowercase()
-        return fromName?.takeIf { generic && it in extensions }
+        if (!generic) return null
+        return originalName?.substringAfterLast('.', "")?.lowercase()?.let(extensions::get)
     }
 
     companion object {
@@ -54,6 +58,7 @@ data class UploadSpec(
                 "image/webp" to "webp",
             ),
             label = "Profile photos must be JPEG, PNG or WebP",
+            extensions = mapOf("jpg" to "jpg", "jpeg" to "jpg", "png" to "png", "webp" to "webp"),
         )
     }
 }

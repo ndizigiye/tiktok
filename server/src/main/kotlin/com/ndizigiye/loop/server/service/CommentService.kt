@@ -13,10 +13,9 @@ import com.ndizigiye.loop.server.db.Comments
 import com.ndizigiye.loop.server.db.LoopDatabase
 import com.ndizigiye.loop.server.paging.KeysetOrder
 import com.ndizigiye.loop.server.paging.PageRequest
-import com.ndizigiye.loop.server.paging.offsetIds
+import com.ndizigiye.loop.server.paging.RankedOrder
 import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.ResultRow
-import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.and
@@ -25,27 +24,29 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insertAndGetId
 import org.jetbrains.exposed.sql.selectAll
 
-class CommentService(private val db: LoopDatabase) {
+class CommentService(private val db: LoopDatabase, private val dto: DtoAssembler) {
     private val oldestFirst = KeysetOrder(Comments.createdAt, Comments.id, descending = false)
+    private val mostLiked = RankedOrder(CommentLikes.userId.count(), Comments.createdAt, Comments.id)
 
-    /** Top-level comments, most liked first, then newest. */
+    /**
+     * Top-level comments, most liked first, then newest (then highest id). The cursor is the
+     * last comment's position, so comments deleted between pages never shift the next page.
+     */
     suspend fun topLevel(videoId: Long, viewerId: Long?, page: PageRequest): PageDto<CommentDto> = db.tx {
         authorOf(videoId)
-        val likes = CommentLikes.userId.count()
-        val ids = Comments.join(CommentLikes, JoinType.LEFT, Comments.id, CommentLikes.commentId)
-            .select(Comments.id, likes)
+        val withLikes = Comments.join(CommentLikes, JoinType.LEFT, Comments.id, CommentLikes.commentId)
+            .select(Comments.id, Comments.createdAt, mostLiked.score)
             .where { (Comments.videoId eq videoId) and Comments.parentId.isNull() }
             .groupBy(Comments.id, Comments.createdAt)
-            .orderBy(likes to SortOrder.DESC, Comments.createdAt to SortOrder.DESC, Comments.id to SortOrder.DESC)
-            .offsetIds(Comments.id, page)
-        PageDto(DtoAssembler.comments(ids.rows, viewerId), ids.nextCursor)
+        val ids = mostLiked.ids(withLikes, page)
+        PageDto(dto.comments(ids.rows, viewerId), ids.nextCursor)
     }
 
     /** Replies to a top-level comment, oldest first. */
     suspend fun replies(commentId: Long, viewerId: Long?, page: PageRequest): PageDto<CommentDto> = db.tx {
         requireComment(commentId)
         val ids = oldestFirst.ids(Comments, Comments.parentId eq commentId, page)
-        PageDto(DtoAssembler.comments(ids.rows, viewerId), ids.nextCursor)
+        PageDto(dto.comments(ids.rows, viewerId), ids.nextCursor)
     }
 
     suspend fun create(
@@ -55,7 +56,7 @@ class CommentService(private val db: LoopDatabase) {
         now: Long = System.currentTimeMillis(),
     ): CommentDto = db.tx {
         val id = insertComment(userId, videoId, request, now)
-        DtoAssembler.comments(listOf(id), userId).single()
+        dto.comments(listOf(id), userId).single()
     }
 
     /**
@@ -68,6 +69,7 @@ class CommentService(private val db: LoopDatabase) {
         if (text.isEmpty() || text.length > ApiLimits.COMMENT_MAX) {
             throw ApiException.validation("Comments are 1-${ApiLimits.COMMENT_MAX} characters.")
         }
+        TextRules.requireStorable(text)
         val videoAuthor = authorOf(videoId)
         val answered = request.parentId?.let { parentId ->
             requireComment(parentId).also {

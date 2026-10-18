@@ -29,7 +29,7 @@ import org.jetbrains.exposed.sql.lowerCase
 import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.sum
 
-class DiscoverService(private val db: LoopDatabase) {
+class DiscoverService(private val db: LoopDatabase, private val dto: DtoAssembler) {
     private val hashtagVideos = VideoHashtags
         .join(Hashtags, JoinType.INNER, VideoHashtags.hashtagId, Hashtags.id)
         .join(Videos, JoinType.INNER, VideoHashtags.videoId, Videos.id)
@@ -43,7 +43,8 @@ class DiscoverService(private val db: LoopDatabase) {
     }
 
     suspend fun search(rawQuery: String?, limit: Int, viewerId: Long?): SearchResultDto {
-        val query = rawQuery?.trim()?.lowercase().orEmpty()
+        // No stored text contains U+0000, and PostgreSQL rejects it as a parameter.
+        val query = rawQuery?.trim()?.lowercase()?.takeIf(TextRules::canStore).orEmpty()
         if (query.isEmpty()) return SearchResultDto()
         return db.tx {
             SearchResultDto(
@@ -57,11 +58,11 @@ class DiscoverService(private val db: LoopDatabase) {
     /** 404 unless at least one video uses the hashtag. */
     suspend fun hashtag(name: String): HashtagDto = db.tx {
         val normalized = VideoRules.hashtagName(name)
-        DtoAssembler.hashtags(listOf(normalized))[normalized] ?: throw ApiException.notFound("Hashtag not found.")
+        dto.hashtags(listOf(normalized))[normalized] ?: throw ApiException.notFound("Hashtag not found.")
     }
 
     suspend fun sound(id: Long): SoundDto = db.tx {
-        DtoAssembler.sound(id) ?: throw ApiException.notFound("Sound not found.")
+        dto.sound(id) ?: throw ApiException.notFound("Sound not found.")
     }
 
     /** Up to 8 hashtags by total views of their videos, each with its 6 most viewed videos. */
@@ -72,14 +73,14 @@ class DiscoverService(private val db: LoopDatabase) {
             .orderBy(views to SortOrder.DESC, Hashtags.name to SortOrder.ASC)
             .limit(TRENDING_HASHTAGS)
             .map { it[Hashtags.name] }
-        val stats = DtoAssembler.hashtags(names)
+        val stats = dto.hashtags(names)
         return names.mapNotNull { name ->
             val ids = hashtagVideos.select(Videos.id)
                 .where { Hashtags.name eq name }
                 .orderBy(Videos.viewCount to SortOrder.DESC, Videos.id to SortOrder.DESC)
                 .limit(VIDEOS_PER_HASHTAG)
                 .map { it[Videos.id].value }
-            stats[name]?.let { TrendingHashtagDto(it, DtoAssembler.videos(ids, viewerId)) }
+            stats[name]?.let { TrendingHashtagDto(it, dto.videos(ids, viewerId)) }
         }
     }
 
@@ -91,7 +92,7 @@ class DiscoverService(private val db: LoopDatabase) {
             .orderBy(uses to SortOrder.DESC, Videos.soundId to SortOrder.ASC)
             .limit(POPULAR_SOUNDS)
             .map { it[Videos.soundId].value }
-        val sounds = DtoAssembler.sounds(ids)
+        val sounds = dto.sounds(ids)
         return ids.mapNotNull(sounds::get)
     }
 
@@ -107,7 +108,7 @@ class DiscoverService(private val db: LoopDatabase) {
             .orderBy(followers to SortOrder.DESC, Users.id to SortOrder.ASC)
             .limit(SUGGESTED_CREATORS)
             .map { it[Users.id].value }
-        return DtoAssembler.userList(ids, viewerId)
+        return dto.userList(ids, viewerId)
     }
 
     /** Exact username match first, then the most followed accounts whose username or name matches. */
@@ -122,7 +123,7 @@ class DiscoverService(private val db: LoopDatabase) {
             .orderBy(exactFirst to SortOrder.ASC, followers to SortOrder.DESC, Users.id to SortOrder.ASC)
             .limit(limit)
             .map { it[Users.id].value }
-        return DtoAssembler.userList(ids, viewerId)
+        return dto.userList(ids, viewerId)
     }
 
     private fun searchVideos(query: String, limit: Int, viewerId: Long?): List<VideoDto> {
@@ -131,7 +132,7 @@ class DiscoverService(private val db: LoopDatabase) {
             .orderBy(Videos.viewCount to SortOrder.DESC, Videos.id to SortOrder.DESC)
             .limit(limit)
             .map { it[Videos.id].value }
-        return DtoAssembler.videos(ids, viewerId)
+        return dto.videos(ids, viewerId)
     }
 
     private fun searchHashtags(query: String, limit: Int): List<HashtagDto> {
@@ -142,7 +143,7 @@ class DiscoverService(private val db: LoopDatabase) {
             .orderBy(uses to SortOrder.DESC, Hashtags.name to SortOrder.ASC)
             .limit(limit)
             .map { it[Hashtags.name] }
-        val stats = DtoAssembler.hashtags(names)
+        val stats = dto.hashtags(names)
         return names.mapNotNull(stats::get)
     }
 

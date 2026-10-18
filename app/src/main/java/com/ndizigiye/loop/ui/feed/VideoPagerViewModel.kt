@@ -1,5 +1,6 @@
 package com.ndizigiye.loop.ui.feed
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ndizigiye.loop.api.PageDto
@@ -14,18 +15,24 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * The list behind the full-screen pager: the handed-off [source] as its first page
- * (continued with the source's own loader), or just [videoId] when the source is
- * gone, e.g. after process death or when opening a single video.
+ * (continued with the source's own loader), or just one video when the source is
+ * gone, e.g. after process death or when opening a single video. The video the pager
+ * settles on is kept in [savedStateHandle], so after process death the pager reopens
+ * at that video rather than at the route's [routeVideoId].
  */
 internal class VideoPagerViewModel(
     private val source: VideoListSource?,
     startIndex: Int,
-    private val videoId: Long?,
+    routeVideoId: Long?,
+    private val savedStateHandle: SavedStateHandle,
     private val videoRepository: VideoRepository,
     applicationScope: CoroutineScope,
 ) : ViewModel() {
 
     private val viewReporter = ViewReporter(videoRepository, applicationScope)
+
+    /** The video to open: the one on screen before process death, else the route's. */
+    private val videoId: Long? = savedStateHandle.get<Long>(KEY_SETTLED_VIDEO_ID) ?: routeVideoId
 
     private val paginator = Paginator<VideoDto>(viewModelScope) { cursor -> load(cursor) }
 
@@ -47,6 +54,11 @@ internal class VideoPagerViewModel(
         paginator.update { items -> items.filterNot { it.id == videoId } }
     }
 
+    /** Remembers the video on screen across process death. */
+    fun onSettled(videoId: Long) {
+        savedStateHandle[KEY_SETTLED_VIDEO_ID] = videoId
+    }
+
     fun recordView(videoId: Long, watchedMs: Long, completed: Boolean) {
         viewReporter.report(videoId, watchedMs, completed)
     }
@@ -65,6 +77,7 @@ internal class VideoPagerViewModel(
 
     private companion object {
         const val UNAVAILABLE_MESSAGE = "This video is no longer available."
+        const val KEY_SETTLED_VIDEO_ID = "settledVideoId"
     }
 }
 

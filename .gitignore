@@ -21,3 +21,7 @@ server/data/
 # Signing
 *.jks
 *.keystore
+
+# Secrets (LOOP_DATABASE_URL, LOOP_SUPABASE_SERVICE_KEY, LOOP_JWT_SECRET) live in the environment only
+.env
+.env.*

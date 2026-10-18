@@ -31,6 +31,7 @@ import org.jetbrains.exposed.sql.Column
 import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inSubQuery
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.notInSubQuery
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.plus
@@ -40,8 +41,10 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.insertAndGetId
 import org.jetbrains.exposed.sql.insertIgnore
+import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.upsert
 
 /** A stored upload, ready to become a video row. */
 data class NewVideo(
@@ -55,12 +58,12 @@ data class NewVideo(
 /** Files that belonged to a deleted video. */
 data class DeletedVideoFiles(val videoFile: String, val thumbFile: String?)
 
-class VideoService(private val db: LoopDatabase) {
+class VideoService(private val db: LoopDatabase, private val dto: DtoAssembler) {
     private val newestFirst = KeysetOrder(Videos.createdAt, Videos.id)
 
     suspend fun create(authorId: Long, video: NewVideo, now: Long = System.currentTimeMillis()): VideoDto = db.tx {
         val id = insertVideo(authorId, video, now)
-        DtoAssembler.video(id, viewerId = authorId)!!
+        dto.video(id, viewerId = authorId)!!
     }
 
     /** Inserts the video, its hashtags and mention notifications; call inside a transaction. */
@@ -80,10 +83,12 @@ class VideoService(private val db: LoopDatabase) {
             it[Videos.soundId] = soundId
             it[createdAt] = now
         }.value
-        CaptionParser.hashtags(caption).filter { it.length <= MAX_HASHTAG_LENGTH }.forEachIndexed { index, name ->
+        val hashtags = CaptionParser.hashtags(caption).filter { it.length <= MAX_HASHTAG_LENGTH }
+        val hashtagIds = hashtagIds(hashtags)
+        hashtags.forEachIndexed { index, name ->
             VideoHashtags.insert {
                 it[videoId] = id
-                it[hashtagId] = hashtagId(name)
+                it[hashtagId] = hashtagIds.getValue(name)
                 it[position] = index
             }
         }
@@ -94,7 +99,7 @@ class VideoService(private val db: LoopDatabase) {
     }
 
     suspend fun get(videoId: Long, viewerId: Long?): VideoDto = db.tx {
-        DtoAssembler.video(videoId, viewerId) ?: throw videoNotFound()
+        dto.video(videoId, viewerId) ?: throw videoNotFound()
     }
 
     /** Deletes the video and everything attached to it; the caller removes the returned files. */
@@ -195,7 +200,7 @@ class VideoService(private val db: LoopDatabase) {
     }
 
     private fun videoPage(ids: RowPage<Long>, viewerId: Long?) =
-        PageDto(DtoAssembler.videos(ids.rows, viewerId), ids.nextCursor)
+        PageDto(dto.videos(ids.rows, viewerId), ids.nextCursor)
 
     private fun createOriginalSound(authorId: Long, now: Long): Long {
         val displayName = Users.select(Users.displayName).where { Users.id eq authorId }.single()[Users.displayName]
@@ -207,27 +212,37 @@ class VideoService(private val db: LoopDatabase) {
         }.value
     }
 
-    private fun hashtagId(name: String): Long =
-        Hashtags.select(Hashtags.id).where { Hashtags.name eq name }.firstOrNull()?.get(Hashtags.id)?.value
-            ?: Hashtags.insertAndGetId { it[Hashtags.name] = name }.value
+    /**
+     * Ids of the hashtags [names], creating missing ones. Another upload may create the same
+     * hashtag concurrently (PostgreSQL), so missing ones are inserted with "ignore", in name
+     * order: two uploads creating the same hashtags then wait for each other instead of deadlocking.
+     */
+    private fun hashtagIds(names: Collection<String>): Map<String, Long> {
+        if (names.isEmpty()) return emptyMap()
+        fun existing() = Hashtags.select(Hashtags.id, Hashtags.name)
+            .where { Hashtags.name inList names }
+            .associate { it[Hashtags.name] to it[Hashtags.id].value }
+        val found = existing()
+        val missing = names.filter { it !in found }.sorted()
+        if (missing.isEmpty()) return found
+        missing.forEach { name -> Hashtags.insertIgnore { it[Hashtags.name] = name } }
+        return existing()
+    }
 
+    /** Adds to the viewer's history in one statement, so concurrent view events add up. */
     private fun recordHistory(viewerId: Long, videoId: Long, watchedMs: Long, completed: Boolean, now: Long) {
-        val match = (ViewHistory.userId eq viewerId) and (ViewHistory.videoId eq videoId)
-        val existing = ViewHistory.selectAll().where { match }.firstOrNull()
-        if (existing == null) {
-            ViewHistory.insert {
-                it[userId] = viewerId
-                it[ViewHistory.videoId] = videoId
-                it[ViewHistory.watchedMs] = watchedMs
-                it[ViewHistory.completed] = completed
-                it[viewedAt] = now
-            }
-        } else {
-            ViewHistory.update({ match }) {
-                it[ViewHistory.watchedMs] = existing[ViewHistory.watchedMs] + watchedMs
-                it[ViewHistory.completed] = existing[ViewHistory.completed] || completed
-                it[viewedAt] = now
-            }
+        ViewHistory.upsert(
+            onUpdate = {
+                it[ViewHistory.watchedMs] = ViewHistory.watchedMs + insertValue(ViewHistory.watchedMs)
+                it[ViewHistory.completed] = ViewHistory.completed or insertValue(ViewHistory.completed)
+                it[ViewHistory.viewedAt] = insertValue(ViewHistory.viewedAt)
+            },
+        ) {
+            it[userId] = viewerId
+            it[ViewHistory.videoId] = videoId
+            it[ViewHistory.watchedMs] = watchedMs
+            it[ViewHistory.completed] = completed
+            it[viewedAt] = now
         }
     }
 
@@ -292,7 +307,7 @@ object VideoRules {
         if (caption.length > ApiLimits.CAPTION_MAX) {
             throw ApiException.validation("Captions can be at most ${ApiLimits.CAPTION_MAX} characters.")
         }
-        return caption
+        return TextRules.requireStorable(caption)
     }
 
     /** Hashtag path parameter: lowercase, without a leading '#'. */

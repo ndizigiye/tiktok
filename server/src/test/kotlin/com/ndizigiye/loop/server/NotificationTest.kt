@@ -110,4 +110,51 @@ class NotificationTest {
         assertEquals(HttpStatusCode.OK, client.put("/api/users/liker/follow") { bearerAuth(creator.token) }.status)
         assertTrue(inbox(creator).first { it.type == NotificationType.FOLLOW }.actor.isFollowing)
     }
+
+    @Test
+    fun `mark read up to a notification leaves newer ones unread`() = loopTest {
+        val creator = register("upto")
+        val fan = register("upto_fan")
+        val video = postVideo(creator)
+        like(fan, video.id)
+        follow(fan, creator)
+        val loaded = inbox(creator)
+        assertEquals(listOf(NotificationType.FOLLOW, NotificationType.LIKE), loaded.map { it.type })
+        comment(fan, video.id, "arrived after the inbox was loaded")
+
+        suspend fun markRead(user: TestUser, query: String) =
+            client.post("/api/notifications/read$query") { bearerAuth(user.token) }
+
+        assertEquals(HttpStatusCode.NoContent, markRead(creator, "?upTo=${loaded.last().id}").status)
+        assertEquals(listOf(false, false, true), inbox(creator).map { it.read }, "only the oldest is read")
+        assertEquals(HttpStatusCode.NoContent, markRead(creator, "?upTo=${loaded.first().id}").status)
+        val inbox = inbox(creator)
+        assertEquals(NotificationType.COMMENT, inbox.first().type)
+        assertEquals(listOf(false, true, true), inbox.map { it.read }, "the newer comment stays unread")
+        assertEquals(1, unread(creator))
+
+        // The inbox order decides, not the id: one dated after the given notification stays
+        // unread although its id is lower.
+        val comment = inbox.first()
+        follow(register("upto_late"), creator)
+        val backdated = inbox(creator).first()
+        assertTrue(backdated.id > comment.id)
+        execute("UPDATE notifications SET created_at = created_at - 3600000 WHERE id = ${backdated.id}")
+        assertEquals(backdated.id, inbox(creator).last().id, "dated an hour back, it is the oldest")
+        assertEquals(2, unread(creator))
+        assertEquals(HttpStatusCode.NoContent, markRead(creator, "?upTo=${backdated.id}").status)
+        assertEquals(1, unread(creator))
+        assertFalse(inbox(creator).single { it.id == comment.id }.read)
+
+        assertError(markRead(creator, "?upTo=abc"), HttpStatusCode.BadRequest, "validation")
+        assertError(markRead(creator, "?upTo=999999"), HttpStatusCode.NotFound, "not_found")
+        like(creator, postVideo(fan).id)
+        val othersNotification = inbox(fan).single()
+        assertError(markRead(creator, "?upTo=${othersNotification.id}"), HttpStatusCode.NotFound, "not_found")
+        assertFalse(inbox(fan).single().read, "another user's notification is untouched")
+        assertEquals(1, unread(creator))
+
+        assertEquals(HttpStatusCode.NoContent, markRead(creator, "?upTo=").status, "an empty upTo means all")
+        assertEquals(0, unread(creator))
+    }
 }

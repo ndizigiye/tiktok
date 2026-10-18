@@ -22,7 +22,6 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -39,8 +38,9 @@ class VideoTest {
         assertEquals(1, video.sound.videoCount)
         assertTrue(video.videoUrl.startsWith("/media/videos/") && video.videoUrl.endsWith(".mp4"))
         assertTrue(File(config.dataDir, video.videoUrl.removePrefix("/media/")).isFile)
+        assertEquals(emptyList(), stagedFiles(), "staged upload files are moved or deleted")
         if (TestMedia.hasFfmpeg) {
-            assertNotNull(video.thumbnailUrl)
+            assertEquals(video.videoUrl.replace("/videos/", "/thumbs/").replace(".mp4", ".jpg"), video.thumbnailUrl)
             assertEquals(90, video.width)
             assertEquals(160, video.height)
             assertTrue(video.durationMs in 1_000..1_500, "duration ${video.durationMs}")
@@ -74,6 +74,7 @@ class VideoTest {
         }
         assertError(missingFile, HttpStatusCode.BadRequest, "validation")
         assertEquals(0, File(config.dataDir, "videos").listFiles()!!.size, "rejected uploads leave no files")
+        assertEquals(emptyList(), stagedFiles())
     }
 
     @Test

@@ -8,8 +8,8 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Renders demo media with ffmpeg's built-in test sources: portrait 540x960 H.264 + AAC,
- * yuv420p and +faststart so clips stream. Output is written to a temporary file and renamed,
- * so an existing target is always complete and can be skipped on the next run.
+ * yuv420p and +faststart so clips stream. Targets are local staging files; the seeder stores
+ * them in the media store afterwards.
  */
 class ClipRenderer(private val tools: MediaTools) {
     /** Renders [clip] with [tone] as its audio into [target]; returns an error message on failure. */
@@ -52,17 +52,9 @@ class ClipRenderer(private val tools: MediaTools) {
     )
 
     private suspend fun render(target: File, args: List<String>): String? {
-        val partial = File(target.parentFile, "${target.name}.part")
-        val result = tools.runFfmpeg(args + partial.absolutePath, if (target.extension == "mp4") CLIP_TIMEOUT else IMAGE_TIMEOUT)
-        if (result?.ok != true || partial.length() == 0L) {
-            partial.delete()
-            return result?.stderr?.trim()?.ifEmpty { null } ?: "ffmpeg failed"
-        }
-        if (!partial.renameTo(target)) {
-            partial.delete()
-            return "could not move ${partial.name} into place"
-        }
-        return null
+        val result = tools.runFfmpeg(args + target.absolutePath, if (target.extension == "mp4") CLIP_TIMEOUT else IMAGE_TIMEOUT)
+        if (result?.ok == true && target.length() > 0) return null
+        return result?.stderr?.trim()?.ifEmpty { null } ?: "ffmpeg failed"
     }
 
     private companion object {

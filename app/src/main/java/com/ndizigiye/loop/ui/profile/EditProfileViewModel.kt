@@ -105,7 +105,8 @@ class EditProfileViewModel(private val userRepository: UserRepository) : ViewMod
 
     private companion object {
         const val AVATAR_FILE_PREFIX = "avatar"
-        const val DEFAULT_MIME_TYPE = "image/jpeg"
+        /** For an image of unknown type: the server then goes by the file name's extension. */
+        const val DEFAULT_MIME_TYPE = "application/octet-stream"
         const val UNREADABLE_IMAGE_MESSAGE = "Couldn't open that image. Try another one."
         const val TOO_LARGE_MESSAGE =
             "That image is too large. Choose one under ${ApiLimits.MAX_AVATAR_BYTES / (1024 * 1024)} MB."

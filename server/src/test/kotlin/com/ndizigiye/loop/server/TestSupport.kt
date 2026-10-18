@@ -8,6 +8,7 @@ import com.ndizigiye.loop.api.PageDto
 import com.ndizigiye.loop.api.RegisterRequest
 import com.ndizigiye.loop.api.ToggleResultDto
 import com.ndizigiye.loop.api.VideoDto
+import com.ndizigiye.loop.server.db.PostgresSettings
 import com.ndizigiye.loop.server.plugins.LoopJson
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -32,26 +33,42 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import java.io.File
 import java.nio.file.Files
+import java.sql.Connection
+import java.sql.DriverManager
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 
-/** Runs [block] against a fresh server with an empty temporary data directory and no seeding. */
-fun loopTest(block: suspend LoopTest.() -> Unit) {
+/**
+ * Runs [block] against a fresh server with an empty temporary data directory and no seeding,
+ * on SQLite or, under `testPostgres`, on a new PostgreSQL database (see [PostgresTests]).
+ * Media goes to the data directory.
+ */
+fun loopTest(block: suspend LoopTest.() -> Unit) = runLoopTest(storage = null, block)
+
+/** Like [loopTest], with media in the bucket of a [FakeSupabaseStorage] ([LoopTest.storage]). */
+fun supabaseLoopTest(block: suspend LoopTest.() -> Unit) = FakeSupabaseStorage().use { runLoopTest(it, block) }
+
+private fun runLoopTest(storage: FakeSupabaseStorage?, block: suspend LoopTest.() -> Unit) {
     val dataDir = Files.createTempDirectory("loop-test").toFile()
+    val postgres = if (PostgresTests.enabled) PostgresTests.createDatabase() else null
     try {
-        val config = ServerConfig(dataDir = dataDir, jwtSecret = "test-secret", seed = false)
+        val config = testConfig(dataDir, postgres, storage)
         testApplication {
             application { module(config) }
-            LoopTest(this, config).block()
+            LoopTest(this, config, storage).block()
         }
     } finally {
+        postgres?.let(PostgresTests::dropDatabase)
         dataDir.deleteRecursively()
     }
 }
 
+fun testConfig(dataDir: File, postgres: PostgresSettings? = null, storage: FakeSupabaseStorage? = null) =
+    ServerConfig(dataDir = dataDir, jwtSecret = "test-secret", seed = false, postgres = postgres, supabase = storage?.settings)
+
 data class TestUser(val token: String, val id: Long, val username: String)
 
-class LoopTest(builder: ApplicationTestBuilder, val config: ServerConfig) {
+class LoopTest(builder: ApplicationTestBuilder, val config: ServerConfig, val storage: FakeSupabaseStorage? = null) {
     /** Client with JSON support and no automatic auth. */
     val client: HttpClient = builder.createClient {
         install(ContentNegotiation) { json(LoopJson) }
@@ -133,6 +150,32 @@ class LoopTest(builder: ApplicationTestBuilder, val config: ServerConfig) {
         } while (cursor != null)
         return items
     }
+
+    /**
+     * The first column of the first row of [sql], run on the server's own database (the SQLite
+     * file or the PostgreSQL test database, where unqualified names resolve to the `loop` schema),
+     * for state the API does not expose.
+     */
+    fun queryLong(sql: String): Long = withConnection { c ->
+        c.createStatement().use { statement ->
+            statement.executeQuery(sql).use { rows ->
+                check(rows.next()) { "no rows: $sql" }
+                rows.getLong(1)
+            }
+        }
+    }
+
+    /** Runs the update [sql] on the server's own database (see [queryLong]), for state the API cannot set up. */
+    fun execute(sql: String): Int = withConnection { c -> c.createStatement().use { it.executeUpdate(sql) } }
+
+    private fun <T> withConnection(block: (Connection) -> T): T {
+        val connection = config.postgres?.let(PostgresTests::connect)
+            ?: DriverManager.getConnection("jdbc:sqlite:${File(config.dataDir, "loop.db").absolutePath}")
+        return connection.use(block)
+    }
+
+    /** Files left in the staging directory; every request deletes its own. */
+    fun stagedFiles(): List<File> = File(config.dataDir, "tmp").listFiles()?.toList().orEmpty()
 
     suspend fun assertError(response: HttpResponse, status: HttpStatusCode, code: String) {
         assertEquals(status, response.status)

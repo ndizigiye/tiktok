@@ -24,37 +24,41 @@ import org.jetbrains.exposed.sql.Column
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.deleteWhere
-import org.jetbrains.exposed.sql.insertAndGetId
 import org.jetbrains.exposed.sql.insertIgnore
+import org.jetbrains.exposed.sql.insertIgnoreAndGetId
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
 
-class UserService(private val db: LoopDatabase, private val tokens: TokenService) {
+class UserService(private val db: LoopDatabase, private val tokens: TokenService, private val dto: DtoAssembler) {
     suspend fun register(request: RegisterRequest): AuthResponse {
         val username = UserRules.username(request.username)
         val displayName = UserRules.displayName(request.displayName)
         UserRules.password(request.password)
         val hashed = withContext(Dispatchers.Default) { PasswordHasher.hash(request.password) }
         return db.tx {
-            if (findId(username) != null) throw ApiException.usernameTaken()
-            val id = Users.insertAndGetId {
+            // One statement, so two concurrent sign-ups for the same name cannot both pass a check.
+            val id = Users.insertIgnoreAndGetId {
                 it[Users.username] = username
                 it[Users.displayName] = displayName
                 it[passwordHash] = hashed.hash
                 it[passwordSalt] = hashed.salt
                 it[avatarColor] = UserRules.avatarColorFor(username)
                 it[createdAt] = System.currentTimeMillis()
-            }.value
-            AuthResponse(tokens.issue(id), DtoAssembler.user(id, viewerId = id)!!)
+            }?.value ?: throw ApiException.usernameTaken()
+            AuthResponse(tokens.issue(id), dto.user(id, viewerId = id)!!)
         }
     }
 
     suspend fun login(request: LoginRequest): AuthResponse {
         val username = request.username.trim().lowercase()
-        val stored = db.tx {
-            Users.select(Users.id, Users.passwordHash, Users.passwordSalt)
-                .where { Users.username eq username }
-                .firstOrNull()
+        val stored = if (!TextRules.canStore(username)) {
+            null
+        } else {
+            db.tx {
+                Users.select(Users.id, Users.passwordHash, Users.passwordSalt)
+                    .where { Users.username eq username }
+                    .firstOrNull()
+            }
         }
         // Hash even for unknown usernames so response time does not reveal which ones exist.
         val valid = withContext(Dispatchers.Default) {
@@ -67,7 +71,7 @@ class UserService(private val db: LoopDatabase, private val tokens: TokenService
         }
         if (!valid || stored == null) throw ApiException.invalidCredentials()
         val id = stored[Users.id].value
-        return AuthResponse(tokens.issue(id), db.tx { DtoAssembler.user(id, viewerId = id) } ?: throw ApiException.invalidCredentials())
+        return AuthResponse(tokens.issue(id), db.tx { dto.user(id, viewerId = id) } ?: throw ApiException.invalidCredentials())
     }
 
     suspend fun exists(userId: Long): Boolean = db.tx {
@@ -98,7 +102,7 @@ class UserService(private val db: LoopDatabase, private val tokens: TokenService
     }
 
     suspend fun byUsername(username: String, viewerId: Long?): UserDto = db.tx {
-        DtoAssembler.user(requireId(username), viewerId)!!
+        dto.user(requireId(username), viewerId)!!
     }
 
     suspend fun followers(username: String, viewerId: Long?, page: PageRequest): PageDto<UserDto> =
@@ -134,7 +138,7 @@ class UserService(private val db: LoopDatabase, private val tokens: TokenService
     ): PageDto<UserDto> = db.tx {
         val target = requireId(username)
         val ids = KeysetOrder(Follows.createdAt, other).ids(Follows, match eq target, page)
-        PageDto(DtoAssembler.userList(ids.rows, viewerId), ids.nextCursor)
+        PageDto(dto.userList(ids.rows, viewerId), ids.nextCursor)
     }
 
     private fun findId(username: String): Long? =
@@ -143,7 +147,7 @@ class UserService(private val db: LoopDatabase, private val tokens: TokenService
     private fun requireId(username: String): Long = findId(username) ?: throw ApiException.notFound("User not found.")
 
     private fun requireUser(userId: Long): UserDto =
-        DtoAssembler.user(userId, viewerId = userId) ?: throw ApiException.unauthorized()
+        dto.user(userId, viewerId = userId) ?: throw ApiException.unauthorized()
 
     private companion object {
         val decoy: PasswordHasher.Hashed by lazy { PasswordHasher.hash("decoy-password") }
@@ -173,7 +177,7 @@ object UserRules {
         if (name.isEmpty() || name.length > ApiLimits.DISPLAY_NAME_MAX) {
             throw ApiException.validation("Display names are 1-${ApiLimits.DISPLAY_NAME_MAX} characters.")
         }
-        return name
+        return TextRules.requireStorable(name)
     }
 
     fun password(raw: String) {
@@ -186,7 +190,7 @@ object UserRules {
     fun bio(raw: String): String {
         val bio = raw.trim()
         if (bio.length > ApiLimits.BIO_MAX) throw ApiException.validation("Bios can be at most ${ApiLimits.BIO_MAX} characters.")
-        return bio
+        return TextRules.requireStorable(bio)
     }
 
     fun avatarColorFor(username: String): String = avatarColors[Math.floorMod(username.hashCode(), avatarColors.size)]

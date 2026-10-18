@@ -20,15 +20,28 @@ both sides serialize them with kotlinx.serialization (`ignoreUnknownKeys = true`
   `{"code": "...", "message": "..."}`. Codes: `validation` (400),
   `unauthorized` (401), `invalid_credentials` (401), `forbidden` (403),
   `not_found` (404), `username_taken` (409), `too_large` (413), `internal` (500).
-  `message` is safe to show to users.
+  `message` is safe to show to users. `too_large` is also returned when the media store
+  (Supabase Storage) refuses a file as too large.
 - Pagination: list endpoints take `?cursor=<opaque>&limit=<n>` (default 10,
   max 50) and return `PageDto<T>` `{"items": [...], "nextCursor": "..."|null}`.
-  Pass `nextCursor` back unchanged; `null` means the end of the list.
-- Media URLs in DTOs are server-relative (`/media/videos/<file>.mp4`). Clients
-  resolve them against the base URL they used for the API.
+  Pass `nextCursor` back unchanged; `null` means the end of the list. A cursor that is
+  malformed or belongs to another list's format is a `validation` error.
+- Uploads (multipart): the file part's `Content-Type` decides its type. When it is missing or
+  `application/octet-stream`, the file name's extension decides instead (any case): `mp4`,
+  `webm`, `3gp`, `mov` for videos; `jpg`, `jpeg`, `png`, `webp` for profile photos. Anything
+  else is `400 validation`, with the message "Videos must be MP4, WebM, 3GP or MOV." for videos
+  and "Profile photos must be JPEG, PNG or WebP." for profile photos.
+- Media URLs in DTOs (`videoUrl`, `thumbnailUrl`, `avatarUrl`, `coverUrl`) are either
+  server-relative (`/media/videos/<file>.mp4`, local media) or absolute public URLs of the
+  Supabase Storage bucket (production:
+  `https://qzqkxwtbajifzsdkotud.supabase.co/storage/v1/object/public/loop-media/videos/<file>.mp4`).
+  Clients resolve relative ones against the base URL they used for the API and use absolute ones
+  as they are, without sending their token or any other credential. See Media.
 - Usernames are case-insensitive and stored lowercase; path parameters accept
   any case. Hashtag names are lowercase without `#`.
 - Timestamps are epoch milliseconds.
+- Text must not contain U+0000 (PostgreSQL cannot store it): such input is a `validation`
+  error, a path name containing it is `404`, and a search for it finds nothing.
 
 ## Health
 
@@ -44,7 +57,7 @@ both sides serialize them with kotlinx.serialization (`ignoreUnknownKeys = true`
 | POST | `/api/auth/login` | `LoginRequest` | `200 AuthResponse`, `401 invalid_credentials`. |
 | GET | `/api/me` [auth] | | `UserDto` (`isMe = true`). |
 | PATCH | `/api/me` [auth] | `UpdateProfileRequest` | `UserDto`. Null fields are left unchanged. |
-| POST | `/api/me/avatar` [auth] | multipart, file part `avatar` (JPEG/PNG/WebP, <= 5 MB) | `UserDto` with new `avatarUrl`. |
+| POST | `/api/me/avatar` [auth] | multipart, file part `avatar` (JPEG/PNG/WebP by type or file name, see Uploads; <= 5 MB) | `UserDto` with new `avatarUrl`. The previous photo is deleted. Other types: `400 validation`. |
 | GET | `/api/me/bookmarks` [auth] | | `PageDto<VideoDto>`, most recently bookmarked first. |
 
 ## Feeds
@@ -73,9 +86,9 @@ Server-side heuristic standing in for a recommender:
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| POST | `/api/videos` [auth] | multipart: file part `video` (MP4/WebM/3GP/MOV, <= 200 MB), form field `caption` (<= 300 chars), optional form field `soundId` | `201 VideoDto`. Hashtags are parsed from the caption with `CaptionParser`. Without `soundId` a new sound "original sound - {displayName}" is created. When `ffprobe`/`ffmpeg` are on PATH the server reads duration/size and writes a JPEG thumbnail; otherwise duration is 0 and `thumbnailUrl` null. Mentions in the caption notify the mentioned users. |
+| POST | `/api/videos` [auth] | multipart: file part `video` (MP4/WebM/3GP/MOV, <= 50 MB, `ApiLimits.MAX_UPLOAD_BYTES`: Supabase Storage's per-file maximum on the free plan), form field `caption` (<= 300 chars), optional form field `soundId` | `201 VideoDto`. Hashtags are parsed from the caption with `CaptionParser`. Without `soundId` a new sound "original sound - {displayName}" is created. When `ffprobe`/`ffmpeg` are on PATH the server reads duration/size and writes a JPEG thumbnail; otherwise duration is 0 and `thumbnailUrl` null. Mentions in the caption notify the mentioned users. |
 | GET | `/api/videos/{id}` [opt] | | `VideoDto` |
-| DELETE | `/api/videos/{id}` [auth] | | `204`; `403` unless the author. Deletes comments, likes, bookmarks, notifications and files. |
+| DELETE | `/api/videos/{id}` [auth] | | `204`; `403` unless the author. Deletes comments, likes, bookmarks, notifications and the stored video and thumbnail (if the media store fails, that is logged and the video is deleted anyway). |
 | PUT | `/api/videos/{id}/like` [auth] | | `ToggleResultDto(active = true, count = likeCount)`. Idempotent. Notifies the author (not for self-likes). |
 | DELETE | `/api/videos/{id}/like` [auth] | | `ToggleResultDto(active = false, ...)`. Idempotent. |
 | PUT / DELETE | `/api/videos/{id}/bookmark` [auth] | | `ToggleResultDto` with `bookmarkCount`. |
@@ -87,7 +100,7 @@ Server-side heuristic standing in for a recommender:
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/videos/{id}/comments` [opt] | | `PageDto<CommentDto>`: top-level comments, most liked first, then newest. |
+| GET | `/api/videos/{id}/comments` [opt] | | `PageDto<CommentDto>`: top-level comments, most liked first, then newest, then highest id. The cursor holds the last comment's position (likes, time, id), so comments deleted between pages never cause a skip or a repeat; a comment whose like count changes while paging can move across the cursor. |
 | GET | `/api/comments/{id}/replies` [opt] | | `PageDto<CommentDto>`: replies, oldest first. |
 | POST | `/api/videos/{id}/comments` [auth] | `CreateCommentRequest` (1..300 chars after trimming) | `201 CommentDto`. If `parentId` is itself a reply, the new reply attaches to that reply's top-level parent. `parentId` must belong to the same video (`400`). Notifies the video author (`comment`), the parent author (`reply`) and mentioned users (`mention`), never the actor themself. |
 | DELETE | `/api/comments/{id}` [auth] | | `204`; allowed for the comment author and the video author. Deleting a top-level comment deletes its replies. |
@@ -124,24 +137,42 @@ Server-side heuristic standing in for a recommender:
 |---|---|---|
 | GET | `/api/notifications` [auth] | `PageDto<NotificationDto>`, newest first. |
 | GET | `/api/notifications/unread-count` [auth] | `CountDto` |
-| POST | `/api/notifications/read` [auth] | `204`, marks all as read. |
+| POST | `/api/notifications/read?upTo=<id>` [auth] | `204`. Without `upTo`, marks all as read. With `upTo` (the newest notification the client has loaded), marks that notification and every one after it in the inbox order (older ones) as read, so notifications that arrived since stay unread. `upTo` that is not a number: `400 validation`; not one of the caller's notifications (e.g. retracted since): `404 not_found`. |
 
 Removing a like, follow or comment deletes the notification it created.
 
 ## Media
 
-Served without the `/api` prefix, with HTTP range requests (`206 Partial
-Content`) so players can seek and prefetch:
+With local media (no `LOOP_SUPABASE_SERVICE_KEY`) the server serves the files itself, without
+the `/api` prefix, with HTTP range requests (`206 Partial Content`) so players can seek and
+prefetch, and `Cache-Control: public, max-age=604800`:
 
 - `GET /media/videos/{file}`
 - `GET /media/thumbs/{file}`
 - `GET /media/avatars/{file}`
 
+With Supabase Storage (`LOOP_SUPABASE_SERVICE_KEY` set) these routes answer `404`, and DTOs carry
+absolute public URLs of the bucket instead:
+
+- `https://<project>.supabase.co/storage/v1/object/public/<bucket>/videos/{file}`
+- `https://<project>.supabase.co/storage/v1/object/public/<bucket>/thumbs/{file}`
+- `https://<project>.supabase.co/storage/v1/object/public/<bucket>/avatars/{file}`
+
+In production the prefix is `https://qzqkxwtbajifzsdkotud.supabase.co/storage/v1/object/public/loop-media/`.
+Supabase serves them without authentication, with range requests (`206 Partial Content`), and with
+the same `max-age=604800` caching as the local routes. File names are never reused, so a cached copy
+never goes stale. When a video is deleted or an avatar replaced, the server deletes the old object
+at once, and the bucket answers its URL with `400` and a JSON body whose `statusCode` is `"404"`
+(the local routes answer `404`). Supabase's CDN can still serve a copy it cached before the delete:
+on the free plan a delete does not purge the CDN, so such a copy lives until it expires (Smart CDN,
+Pro plan and above, invalidates it within about a minute). Clients must not send their Loop token
+to these URLs.
+
 ## Web
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/v/{id}` | `200 text/html`: the public page behind the app's "Copy link" / share action. A small self-contained page (inline CSS, no external assets) with the author, caption, sound, counts and an HTML5 `<video controls playsinline loop>` of the clip, using the thumbnail as `poster`. `404` (`ErrorDto`) for unknown ids. Share links are `<baseUrl>v/<id>`. |
+| GET | `/v/{id}` | `200 text/html`: the public page behind the app's "Copy link" / share action. A small page (inline CSS, no scripts, no assets besides the clip's media) with the author, caption, sound, counts and an HTML5 `<video controls playsinline loop>` of the clip, using the thumbnail as `poster`. Local media URLs are relative to the page (`../media/videos/...`), so they also resolve behind a path prefix; Supabase Storage URLs are absolute. `404` (`ErrorDto`) for unknown ids. Share links are `<baseUrl>v/<id>`. |
 
 ## Server configuration
 
@@ -150,7 +181,12 @@ Environment variables (all optional):
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | HTTP port (binds 0.0.0.0). |
-| `LOOP_DATA_DIR` | `./data` | SQLite database and media files. |
+| `LOOP_DATA_DIR` | `./data` | Media files when `LOOP_SUPABASE_SERVICE_KEY` is unset, the SQLite database when `LOOP_DATABASE_URL` is unset, and temporary upload files (`tmp/`). |
+| `LOOP_DATABASE_URL` | unset (SQLite) | PostgreSQL connection string (Supabase session pooler, `postgresql://user:password@host:5432/postgres`, or a `jdbc:postgresql://` URL). Secret. Tables live in the schema `loop`, created by `server/supabase/migrations/`; see `server/README.md`. |
+| `LOOP_DATABASE_POOL_SIZE` | `5` | Maximum PostgreSQL connections (1-50). |
+| `LOOP_SUPABASE_SERVICE_KEY` | unset (local media) | Secret (`sb_secret_...`) or `service_role` key of the Supabase project. Secret. When set, videos, thumbnails and avatars are stored in Supabase Storage and DTOs carry the bucket's public URLs; see `server/README.md`. |
+| `LOOP_SUPABASE_URL` | `https://qzqkxwtbajifzsdkotud.supabase.co` | Supabase project URL. |
+| `LOOP_SUPABASE_BUCKET` | `loop-media` | Public Storage bucket for media. |
 | `LOOP_JWT_SECRET` | dev-only constant (logged warning) | HMAC secret for tokens. |
 | `LOOP_SEED` | `true` | Seed demo users, videos (generated with ffmpeg), follows, likes and comments when the database is empty. |
 | `LOOP_FFMPEG` / `LOOP_FFPROBE` | `ffmpeg` / `ffprobe` | Tool paths. Without them the server still runs; uploads get no thumbnail and seeding skips media generation. |

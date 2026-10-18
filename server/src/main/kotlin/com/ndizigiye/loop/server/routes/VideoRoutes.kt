@@ -3,7 +3,6 @@ package com.ndizigiye.loop.server.routes
 import com.ndizigiye.loop.api.CreateCommentRequest
 import com.ndizigiye.loop.api.ViewEventRequest
 import com.ndizigiye.loop.server.LoopServices
-import com.ndizigiye.loop.server.media.MediaKind
 import com.ndizigiye.loop.server.media.UploadSpec
 import com.ndizigiye.loop.server.media.receiveUpload
 import com.ndizigiye.loop.server.plugins.JWT_AUTH
@@ -50,12 +49,12 @@ fun Route.videoRoutes(services: LoopServices) {
         }
         post("/api/videos") {
             val userId = call.userId()
-            val upload = call.receiveUpload(UploadSpec.VIDEO) { services.storage.newFile(MediaKind.VIDEOS, it) }
+            val upload = call.receiveUpload(UploadSpec.VIDEO, services.staging::newFile)
             call.respond(HttpStatusCode.Created, services.uploads.publishVideo(userId, upload))
         }
         route("/api/videos/{id}") {
             delete {
-                services.uploads.deleteVideoFiles(videos.delete(call.userId(), call.videoId()))
+                services.uploads.deleteVideoMedia(videos.delete(call.userId(), call.videoId()))
                 call.respond(HttpStatusCode.NoContent)
             }
             put("/like") {

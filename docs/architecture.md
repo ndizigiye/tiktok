@@ -4,8 +4,11 @@ Loop is an original short-video app: a vertical, full-screen, swipeable video
 feed with likes, comments, sharing, discovery, in-app recording and creator
 profiles, backed by its own server. It reproduces the *interaction model*
 popularised by short-video apps; it contains no code, assets, names or
-branding from any existing app, and it does not talk to any third-party
-service.
+branding from any existing app. The app talks only to its own server, which
+keeps its data in SQLite or in the project's own Supabase Postgres database, and
+its media on disk or in the project's Supabase Storage bucket. The app never uses
+Supabase's APIs or keys; with Supabase Storage it loads media from the bucket's
+public URLs that the server puts in the DTOs.
 
 ```
 repo/
@@ -13,8 +16,10 @@ repo/
 ├── gradle/libs.versions.toml               single version catalog for both builds
 ├── shared/                                 Kotlin/JVM: API DTOs + pure helpers
 ├── app/                                    Android app (Kotlin, Compose, Media3, CameraX)
-├── server/                                 separate Gradle build: Ktor + SQLite backend
-└── docs/                                   api.md, architecture.md, feature-analysis.md, rea-playbook.md
+├── server/                                 separate Gradle build: Ktor backend (SQLite or Supabase Postgres,
+│                                           local disk or Supabase Storage); supabase/migrations/ for the schema
+└── docs/                                   api.md, architecture.md, feature-analysis.md, rea-playbook.md,
+                                            supabase-live-check.md
 ```
 
 ## Toolchain (pinned in `gradle/libs.versions.toml`)
@@ -26,7 +31,7 @@ lifecycle 2.8.7, navigation-compose 2.8.5 (type-safe `@Serializable` routes),
 Media3 1.5.1, CameraX 1.4.1, Coil 3.0.4, Retrofit 2.11.0 with the official
 kotlinx-serialization converter, OkHttp 4.12.0, kotlinx-serialization 1.7.3,
 coroutines 1.9.0. Server: Ktor 3.0.3, Exposed 0.57.0, sqlite-jdbc 3.47.1.0,
-logback 1.5.12.
+PostgreSQL JDBC 42.7.14, HikariCP 7.1.0, logback 1.5.12.
 
 No annotation processing (no KSP/kapt, no Hilt, no Room): dependency injection
 is a hand-written `AppContainer`, persistence is `SharedPreferences`, and the
@@ -97,7 +102,7 @@ class SessionStore(context: Context) {
     fun clear()
     val baseUrl: StateFlow<String>             // default BuildConfig.DEFAULT_BASE_URL = "http://10.0.2.2:8080/"
     fun setBaseUrl(url: String)                // normalised to end with "/"
-    fun resolveUrl(path: String?): String?     // "/media/x.mp4" -> "<baseUrl>media/x.mp4"; absolute URLs unchanged; null stays null
+    fun resolveUrl(path: String?): String?     // "/media/x.mp4" -> "<baseUrl>media/x.mp4"; absolute URLs (Supabase Storage) unchanged; null stays null
 }
 
 // ---- data/remote/ApiErrors.kt
@@ -193,7 +198,7 @@ class InboxRepository {
     val unreadCount: StateFlow<Long>
     suspend fun notifications(cursor: String?): Result<PageDto<NotificationDto>>
     suspend fun refreshUnreadCount()
-    suspend fun markAllRead(): Result<Unit>
+    suspend fun markAllRead(upTo: Long): Result<Unit>   // upTo = newest loaded id; refreshes unreadCount afterwards
 }
 
 // ---- data/VideoListHandoff.kt — passes an already-loaded list to the full-screen pager
@@ -203,6 +208,8 @@ class VideoListSource(
     val loadMore: (suspend (cursor: String) -> Result<PageDto<VideoDto>>)?,
 )
 class VideoListHandoff { fun put(source: VideoListSource): String; fun get(key: String): VideoListSource? }
+//  In memory only: after process death the pager gets null and shows just the video that was on
+//  screen (VideoPagerViewModel keeps its id in a SavedStateHandle), else the route's videoId.
 
 // ---- data/FileUtils.kt
 const val TEMP_FILE_PREFIX = "loop-"                                  // every Loop temp file in cacheDir starts with it
@@ -306,7 +313,10 @@ Routes (`ui/navigation/Routes.kt`, `@Serializable`): `MainRoute`, `AuthRoute`,
 - ViewModels are created with `viewModel { FooViewModel(container.x, ...) }`
   (`androidx.lifecycle.viewmodel.compose.viewModel`), keyed with `key = ...`
   when a screen is parameterised. They expose `StateFlow`s collected with
-  `collectAsStateWithLifecycle()`.
+  `collectAsStateWithLifecycle()`. State that must survive process death goes
+  into a `SavedStateHandle` from `createSavedStateHandle()` in that initializer
+  (`VideoPagerViewModel` keeps the video on screen; `VerticalVideoFeed` reports it
+  through `onSettled`).
 - User-visible strings are in English in the composables (the app is a
   reference implementation; strings.xml holds only `app_name`).
 - Icons come from `androidx.compose.material.icons` (core + extended); no
@@ -334,7 +344,28 @@ Routes (`ui/navigation/Routes.kt`, `@Serializable`): `MainRoute`, `AuthRoute`,
 
 ## Server
 
-`server/` is a Ktor 3 application (Netty) with Exposed over SQLite in
-`LOOP_DATA_DIR`. Routes follow `docs/api.md`. On first start with an empty
-database it seeds demo users and generates demo clips with ffmpeg's built-in
-test sources (no third-party media).
+`server/` is a Ktor 3 application (Netty) and the app's only backend. Where it keeps
+data is configuration; routes and services are the same either way.
+
+- Rows: Exposed over SQLite in `LOOP_DATA_DIR` by default, or over PostgreSQL when
+  `LOOP_DATABASE_URL` is set. Production is the Supabase project `loop` (ref
+  `qzqkxwtbajifzsdkotud`, eu-central-1), reached through its session pooler. Every
+  table lives in the private schema `loop`, which only `server/supabase/migrations/`
+  creates: row level security on without policies, no privileges for `anon` and
+  `authenticated`, not exposed through the Data API. The server never creates tables
+  there; at startup it compares the schema with `db/Tables.kt` and exits with
+  instructions when they differ.
+- Media: a `MediaStore`. By default files in `LOOP_DATA_DIR`, served at `/media/...`;
+  with `LOOP_SUPABASE_SERVICE_KEY`, the public Storage bucket `loop-media` (uploads and
+  deletes through the Storage REST API with the secret key; DTOs carry the absolute
+  public object URLs, which clients load directly, with Range requests).
+  ffmpeg/ffprobe always work on local temporary copies in `LOOP_DATA_DIR/tmp`.
+- Secrets (database URL, Storage key, JWT secret) come only from the environment and
+  never appear in logs or error messages. The app never talks to Supabase and never
+  holds a key.
+
+Routes follow `docs/api.md`. On first start with an empty database it seeds demo
+users and generates demo clips with ffmpeg's built-in test sources (no third-party
+media), stored through the same `MediaStore`. Setup, configuration and operations are
+in `server/README.md` (section "Supabase"); `docs/supabase-live-check.md` verifies a
+deployment against the live project.

@@ -4,9 +4,11 @@ import com.ndizigiye.loop.server.auth.PasswordHasher
 import com.ndizigiye.loop.server.feed.Candidate
 import com.ndizigiye.loop.server.feed.ForYouRanker
 import com.ndizigiye.loop.server.feed.ViewerSignals
+import com.ndizigiye.loop.server.media.MediaStaging
 import com.ndizigiye.loop.server.media.MediaTools
 import com.ndizigiye.loop.server.media.VideoProbe
 import com.ndizigiye.loop.server.paging.Cursors
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -95,5 +97,25 @@ class ProbeParsingTest {
         assertEquals(VideoProbe(3250, 1080, 1920), MediaTools.parseProbe(json))
         val plain = """{"streams":[{"width":540,"height":960,"tags":{"rotate":"0"}}],"format":{"duration":"8.0"}}"""
         assertEquals(VideoProbe(8000, 540, 960), MediaTools.parseProbe(plain))
+    }
+}
+
+class MediaStagingTest {
+    @Test
+    fun `files a crash left behind are removed at startup`() {
+        val dir = Files.createTempDirectory("loop-staging-test").toFile()
+        try {
+            val stale = dir.resolve("loop-1.mp4").apply { writeText("old") }
+            stale.setLastModified(System.currentTimeMillis() - 7 * 3_600_000L)
+            val recent = dir.resolve("loop-2.mp4").apply { writeText("in progress") }
+            val staging = MediaStaging(dir)
+            assertFalse(stale.exists())
+            assertTrue(recent.exists(), "another process may still be using it")
+            val created = staging.newFile("jpg")
+            assertTrue(created.isFile && created.name.startsWith("loop-") && created.name.endsWith(".jpg"))
+            assertEquals(setOf(recent, created), staging.files().toSet())
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

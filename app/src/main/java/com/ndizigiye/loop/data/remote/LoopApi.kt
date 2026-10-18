@@ -234,6 +234,7 @@ interface LoopApi {
     @GET("api/notifications/unread-count")
     suspend fun unreadCount(): CountDto
 
+    /** Marks the notification [upTo] and every older one as read; all of them when null. */
     @POST("api/notifications/read")
-    suspend fun markNotificationsRead(): Unit
+    suspend fun markNotificationsRead(@Query("upTo") upTo: Long? = null): Unit
 }

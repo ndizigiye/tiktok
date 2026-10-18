@@ -57,7 +57,11 @@ object Hashtags : LongIdTable("hashtags") {
 
 object VideoHashtags : Table("video_hashtags") {
     val videoId = reference("video_id", Videos, onDelete = CASCADE)
-    val hashtagId = reference("hashtag_id", Hashtags, onDelete = CASCADE).index()
+    /**
+     * Not cascading: unused hashtags are deleted with `NOT IN (links)`, and a link committed by a
+     * concurrent upload in the meantime must make that delete fail (and retry), not vanish with it.
+     */
+    val hashtagId = reference("hashtag_id", Hashtags).index()
     /** Order of first appearance in the caption. */
     val position = integer("position")
     override val primaryKey = PrimaryKey(videoId, hashtagId)
@@ -86,7 +90,8 @@ object Bookmarks : Table("bookmarks") {
 
 object Comments : LongIdTable("comments") {
     val videoId = reference("video_id", Videos, onDelete = CASCADE)
-    val authorId = reference("author_id", Users, onDelete = CASCADE)
+    /** Indexed for the cascade when a user is deleted (migration `*_comments_author_id_index.sql`). */
+    val authorId = reference("author_id", Users, onDelete = CASCADE).index()
     /** Top-level comment this reply belongs to; null for top-level comments. */
     val parentId = reference("parent_id", Comments, onDelete = CASCADE).nullable().index()
     val text = varchar("text", ApiLimits.COMMENT_MAX)

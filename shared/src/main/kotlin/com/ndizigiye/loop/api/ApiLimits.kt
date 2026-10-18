@@ -13,8 +13,8 @@ object ApiLimits {
     const val COMMENT_MAX = 300
     const val DEFAULT_PAGE_SIZE = 10
     const val MAX_PAGE_SIZE = 50
-    /** Upload size cap in bytes. */
-    const val MAX_UPLOAD_BYTES = 200L * 1024 * 1024
+    /** Video upload size cap in bytes: 50 MB, the per-file maximum of Supabase Storage on the free plan. */
+    const val MAX_UPLOAD_BYTES = 50L * 1024 * 1024
     /** Profile photo size cap in bytes. */
     const val MAX_AVATAR_BYTES = 5L * 1024 * 1024
     /** Maximum recording length offered by the camera screen. */

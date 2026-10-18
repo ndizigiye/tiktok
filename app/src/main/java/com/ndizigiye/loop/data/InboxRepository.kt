@@ -32,8 +32,13 @@ class InboxRepository(
         apiCall { api.unreadCount() }.onSuccess { _unreadCount.value = it.count }
     }
 
-    suspend fun markAllRead(): Result<Unit> =
-        apiCall { api.markNotificationsRead() }.onSuccess { _unreadCount.value = 0 }
+    /**
+     * Marks the notification [upTo] (the newest one loaded) and every older one as read, so
+     * notifications that arrived after the list was loaded stay unread, then refreshes
+     * [unreadCount] (also when the request failed).
+     */
+    suspend fun markAllRead(upTo: Long): Result<Unit> =
+        apiCall { api.markNotificationsRead(upTo) }.also { refreshUnreadCount() }
 
     /** Resets [unreadCount], e.g. on logout. */
     fun reset() {

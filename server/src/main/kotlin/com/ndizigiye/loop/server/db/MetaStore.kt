@@ -1,5 +1,6 @@
 package com.ndizigiye.loop.server.db
 
+import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.upsert
 
@@ -15,6 +16,13 @@ object MetaStore {
         }
     }
 
+    /** The stored value, or [create]'s value stored now; concurrent callers all get the value stored first. */
     fun getOrPut(key: String, create: () -> String): String =
-        get(key) ?: create().also { put(key, it) }
+        get(key) ?: run {
+            Meta.insertIgnore {
+                it[Meta.key] = key
+                it[Meta.value] = create()
+            }
+            checkNotNull(get(key))
+        }
 }

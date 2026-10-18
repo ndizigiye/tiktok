@@ -281,13 +281,13 @@ class VideoRepositoryTest {
     @Test
     fun `a rejected upload reports the server's message`() = runTest {
         val file = tempFile(".mp4", ByteArray(10))
-        backend.enqueueError(413, "too_large", "Videos can be at most 200 MB.")
+        backend.enqueueError(413, "too_large", "Videos can be at most 50 MB.")
 
         val error = repository.upload(file, caption = "x", soundId = null) {}.exceptionOrNull()
 
         assertIs<ApiException>(error)
         assertEquals(413, error.status)
-        assertEquals("Videos can be at most 200 MB.", error.message)
+        assertEquals("Videos can be at most 50 MB.", error.message)
         assertNull(interactions.videos.value[99])
     }
 

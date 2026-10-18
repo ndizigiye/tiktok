@@ -1,5 +1,6 @@
 package com.ndizigiye.loop.server
 
+import com.ndizigiye.loop.server.media.LocalMediaStore
 import com.ndizigiye.loop.server.plugins.configureErrorHandling
 import com.ndizigiye.loop.server.plugins.configureHttp
 import com.ndizigiye.loop.server.plugins.configureSecurity
@@ -32,6 +33,8 @@ fun Application.module(config: ServerConfig) {
     }
     val services = runBlocking { LoopServices.open(config) }
     monitor.subscribe(ApplicationStopped) { services.close() }
+    log.info("Loop database: {}", services.db.description)
+    log.info("Loop media: {}", services.media.description)
     log.info("Loop data directory: {}", config.dataDir.absoluteFile)
 
     configureHttp()
@@ -40,7 +43,7 @@ fun Application.module(config: ServerConfig) {
     configureSecurity(services.tokens, services.users::exists)
     routing {
         webRoutes(services)
-        mediaRoutes(services.storage)
+        (services.media as? LocalMediaStore)?.let { mediaRoutes(it) }
         accountRoutes(services)
         videoRoutes(services)
         socialRoutes(services)

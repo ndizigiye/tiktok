@@ -66,7 +66,7 @@ class MediaTest {
 
         val first = uploadAvatar(ByteArray(64) { 1 }, "image/png").body<UserDto>()
         val firstUrl = assertNotNull(first.avatarUrl)
-        assertTrue(firstUrl.startsWith("/media/avatars/") && firstUrl.endsWith(".png"))
+        assertTrue(firstUrl.startsWith("/media/avatars/${user.id}-") && firstUrl.endsWith(".png"), firstUrl)
         assertContentEquals(ByteArray(64) { 1 }, client.get(firstUrl).readRawBytes())
 
         val second = uploadAvatar(ByteArray(32) { 2 }, "image/jpeg").body<UserDto>()
@@ -77,6 +77,36 @@ class MediaTest {
         val tooLarge = ByteArray(ApiLimits.MAX_AVATAR_BYTES.toInt() + 1)
         assertError(uploadAvatar(tooLarge, "image/png"), HttpStatusCode.PayloadTooLarge, "too_large")
         assertEquals(second.avatarUrl, client.get("/api/me") { bearerAuth(user.token) }.body<UserDto>().avatarUrl)
+        assertEquals(emptyList(), stagedFiles())
+    }
+
+    @Test
+    fun `avatars without a specific type are typed by their file name`() = loopTest {
+        val user = register("octet")
+        suspend fun uploadAvatar(fileName: String) = client.submitFormWithBinaryData(
+            "/api/me/avatar",
+            formData {
+                append("avatar", ByteArray(16) { 3 }, Headers.build {
+                    append(HttpHeaders.ContentType, "application/octet-stream")
+                    append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                })
+            },
+        ) { bearerAuth(user.token) }
+
+        listOf("photo.jpg" to "jpg", "PHOTO.JPEG" to "jpg", "loop-avatar1.png" to "png", "photo.webp" to "webp")
+            .forEach { (fileName, extension) ->
+                val response = uploadAvatar(fileName)
+                assertEquals(HttpStatusCode.OK, response.status, fileName)
+                val url = assertNotNull(response.body<UserDto>().avatarUrl)
+                assertTrue(url.endsWith(".$extension"), "$fileName: $url")
+            }
+        listOf("photo.gif", "photo.heic", "loop-avatar2.tmp", "photo", "jpg").forEach { fileName ->
+            val response = uploadAvatar(fileName)
+            assertEquals(HttpStatusCode.BadRequest, response.status, fileName)
+            assertEquals(ErrorDto("validation", "Profile photos must be JPEG, PNG or WebP."), response.body<ErrorDto>())
+        }
+        assertTrue(client.get("/api/me") { bearerAuth(user.token) }.body<UserDto>().avatarUrl!!.endsWith(".webp"))
+        assertEquals(emptyList(), stagedFiles())
     }
 
     @Test
@@ -87,13 +117,14 @@ class MediaTest {
         assertEquals(HttpStatusCode.OK, response.status)
         assertEquals(ContentType.Text.Html, response.contentType()?.withoutParameters())
         val html = response.bodyAsText()
-        assertTrue("<video src=\"${video.videoUrl}\"" in html)
+        // Relative to the page (/v/{id}), so a server behind a path prefix works too.
+        assertTrue("<video src=\"..${video.videoUrl}\"" in html, html)
         assertTrue("controls playsinline loop" in html)
         assertTrue("<a class=\"open\" href=\"loop://video/${video.id}\">Open in Loop</a>" in html, "deep link button")
         assertTrue("Look at this &amp; that #demo" in html)
         assertTrue("Sharer &lt;b&gt;" in html)
         assertTrue("http://" !in html && "https://" !in html, "no external assets")
-        video.thumbnailUrl?.let { assertTrue("poster=\"$it\"" in html) }
+        video.thumbnailUrl?.let { assertTrue("poster=\"..$it\"" in html) }
         assertError(client.get("/v/999"), HttpStatusCode.NotFound, "not_found")
     }
 

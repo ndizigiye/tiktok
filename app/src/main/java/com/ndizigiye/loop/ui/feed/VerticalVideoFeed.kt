@@ -61,7 +61,7 @@ private sealed interface FeedSheet {
  * prefetches the next videos and the playing video's first comments (see
  * [PreloadPolicy]), and reports each page's view through [onViewed] when it stops
  * being current or the feed is left. [onRemove] drops a video from the list (not
- * interested, deleted).
+ * interested, deleted). [onSettled] gets the id of every video the pager settles on.
  *
  * [listId] identifies the list in [state]: when it changes (a refresh, another
  * account) the pager starts again from the top, also when the list was replaced
@@ -77,6 +77,7 @@ internal fun VerticalVideoFeed(
     onViewed: (videoId: Long, watchedMs: Long, completed: Boolean) -> Unit,
     onRemove: (videoId: Long) -> Unit,
     modifier: Modifier = Modifier,
+    onSettled: (videoId: Long) -> Unit = {},
     listId: Long = 0L,
     initialPage: Int = 0,
     allowPictureInPicture: Boolean = false,
@@ -96,6 +97,7 @@ internal fun VerticalVideoFeed(
             onRetry = onRetry,
             onViewed = onViewed,
             onRemove = onRemove,
+            onSettled = onSettled,
             modifier = modifier,
         )
         error != null -> ErrorBox(message = error, onRetry = onRetry, modifier = modifier)
@@ -115,6 +117,7 @@ private fun VideoFeedPager(
     onRetry: () -> Unit,
     onViewed: (videoId: Long, watchedMs: Long, completed: Boolean) -> Unit,
     onRemove: (videoId: Long) -> Unit,
+    onSettled: (videoId: Long) -> Unit,
     modifier: Modifier,
 ) {
     val videos = state.items
@@ -142,6 +145,7 @@ private fun VideoFeedPager(
     val currentOnRetry by rememberUpdatedState(onRetry)
     val currentOnViewed by rememberUpdatedState(onViewed)
     val currentOnRemove by rememberUpdatedState(onRemove)
+    val currentOnSettled by rememberUpdatedState(onSettled)
 
     // Players for the settled page and its neighbours; pages further away show their thumbnail.
     val baseUrl by sessionStore.baseUrl.collectAsStateWithLifecycle()
@@ -165,6 +169,10 @@ private fun VideoFeedPager(
         currentPlayer?.setPlaybackSpeed(playbackSpeed)
         onDispose { currentPlayer?.setPlaybackSpeed(1f) }
     }
+
+    // The video on screen, e.g. for the pager to reopen it after process death.
+    val settledVideoId = videos[current].id
+    LaunchedEffect(settledVideoId) { currentOnSettled(settledVideoId) }
 
     // One view per visit of the current page, measured while it actually plays.
     val visitVideo = videos[current]

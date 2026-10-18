@@ -27,7 +27,11 @@ import java.security.SecureRandom
  * can be rebuilt deterministically from the cursor if it was evicted. When a pass runs out,
  * the next cursor starts a new pass with a derived seed.
  */
-class ForYouService(private val db: LoopDatabase, private val passes: PassCache = PassCache()) {
+class ForYouService(
+    private val db: LoopDatabase,
+    private val dto: DtoAssembler,
+    private val passes: PassCache = PassCache(),
+) {
     private val random = SecureRandom()
 
     suspend fun page(viewerId: Long?, page: PageRequest): PageDto<VideoDto> = db.tx {
@@ -48,7 +52,7 @@ class ForYouService(private val db: LoopDatabase, private val passes: PassCache 
             } else {
                 position.copy(offset = index)
             }
-            val videos = DtoAssembler.videos(picked, viewerId)
+            val videos = dto.videos(picked, viewerId)
             if (videos.isNotEmpty()) return@tx PageDto(videos, Cursors.feed(next))
             position = next
         }
@@ -143,6 +147,14 @@ class PassCache(private val maxEntries: Int = 1_000) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, Pass>): Boolean = size > maxEntries
     }
 
-    @Synchronized
-    fun getOrPut(key: Key, compute: () -> Pass): Pass = entries.getOrPut(key, compute)
+    /**
+     * The cached pass for [key], or [compute]'s. Computing runs outside the lock so concurrent
+     * transactions (PostgreSQL) don't queue behind one ranking; when two requests compute the
+     * same pass, both get the one stored first.
+     */
+    fun getOrPut(key: Key, compute: () -> Pass): Pass {
+        synchronized(this) { entries[key] }?.let { return it }
+        val pass = compute()
+        return synchronized(this) { entries.getOrPut(key) { pass } }
+    }
 }

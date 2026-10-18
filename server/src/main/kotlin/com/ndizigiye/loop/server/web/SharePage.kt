@@ -4,18 +4,19 @@ import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.common.formatCount
 
 /**
- * Self-contained HTML for `/v/{id}`, the target of the app's share links. No external assets.
- * Its "Open in Loop" button is a `loop://video/{id}` deep link that the Android app handles.
+ * HTML for `/v/{id}`, the target of the app's share links: inline CSS, no scripts, and no assets
+ * besides the video's own media. Its "Open in Loop" button is a `loop://video/{id}` deep link that
+ * the Android app handles.
  */
 object SharePage {
     fun render(video: VideoDto): String {
         val author = video.author
         val title = "${author.displayName} (@${author.username}) on Loop"
         val description = video.caption.ifBlank { "A video by @${author.username}" }
-        val poster = video.thumbnailUrl?.let { """ poster="${it.escape()}"""" }.orEmpty()
+        val poster = video.thumbnailUrl?.let { """ poster="${mediaUrl(it).escape()}"""" }.orEmpty()
         val initial = author.displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
         val avatar = author.avatarUrl
-            ?.let { """<img class="avatar" src="${it.escape()}" alt="">""" }
+            ?.let { """<img class="avatar" src="${mediaUrl(it).escape()}" alt="">""" }
             ?: """<span class="avatar" style="background:${author.avatarColor.escape()}">${initial.escape()}</span>"""
         return """
             |<!doctype html>
@@ -52,7 +53,7 @@ object SharePage {
             |<body>
             |<main>
             |  <div class="frame">
-            |    <video src="${video.videoUrl.escape()}"$poster controls playsinline loop preload="metadata"></video>
+            |    <video src="${mediaUrl(video.videoUrl).escape()}"$poster controls playsinline loop preload="metadata"></video>
             |  </div>
             |  <a class="open" href="${deepLink(video.id).escape()}">Open in Loop</a>
             |  <div class="author">
@@ -71,6 +72,13 @@ object SharePage {
     }
 
     private fun deepLink(videoId: Long): String = "loop://video/$videoId"
+
+    /**
+     * Media URLs as the page uses them. Absolute ones (Supabase Storage) stay as they are. Server-relative
+     * ones (`/media/...`) become relative to the page at `<base>/v/{id}`, so they also resolve when the
+     * server is reached under a path prefix (`https://host/loop/v/1` loads `https://host/loop/media/...`).
+     */
+    private fun mediaUrl(url: String): String = if (url.startsWith("/")) "..$url" else url
 
     private fun String.escape(): String = buildString(length) {
         for (c in this@escape) {

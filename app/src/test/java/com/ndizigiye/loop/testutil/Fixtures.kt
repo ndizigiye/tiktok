@@ -1,6 +1,8 @@
 package com.ndizigiye.loop.testutil
 
 import com.ndizigiye.loop.api.CommentDto
+import com.ndizigiye.loop.api.NotificationDto
+import com.ndizigiye.loop.api.NotificationType
 import com.ndizigiye.loop.api.SoundDto
 import com.ndizigiye.loop.api.UserDto
 import com.ndizigiye.loop.api.VideoDto
@@ -61,5 +63,18 @@ fun comment(
     text = text,
     replyCount = replyCount,
     parentId = parentId,
+    createdAt = 1_700_000_000_000,
+)
+
+fun notification(
+    id: Long,
+    actor: UserDto = user(id = 300 + id),
+    type: NotificationType = NotificationType.FOLLOW,
+    read: Boolean = false,
+) = NotificationDto(
+    id = id,
+    type = type,
+    actor = actor,
+    read = read,
     createdAt = 1_700_000_000_000,
 )
