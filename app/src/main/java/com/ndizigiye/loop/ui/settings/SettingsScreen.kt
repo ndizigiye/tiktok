@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.common.LoopTopBar
+import com.ndizigiye.loop.ui.common.rememberMessageScope
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 import com.ndizigiye.loop.ui.navigation.MainTab

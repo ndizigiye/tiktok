@@ -54,6 +54,7 @@ import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.common.LoopTopBar
 import com.ndizigiye.loop.ui.common.SignedOutPrompt
 import com.ndizigiye.loop.ui.common.rememberBackAction
+import com.ndizigiye.loop.ui.common.rememberMessageScope
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.theme.LoopColors
 import kotlinx.coroutines.launch
@@ -90,14 +91,14 @@ private fun EditProfileForm(user: UserDto) {
     var name by rememberSaveable { mutableStateOf(user.displayName) }
     var bio by rememberSaveable { mutableStateOf(user.bio) }
     val back = rememberBackAction()
-    val windowScope = rememberWindowScope()
+    val messageScope = rememberMessageScope()
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
                 EditProfileEvent.Saved -> {
                     // The snackbar outlives this screen, which closes right away.
-                    windowScope.launch { snackbarHostState.showSnackbar("Profile updated") }
+                    messageScope.launch { snackbarHostState.showSnackbar("Profile updated") }
                     back()
                 }
                 EditProfileEvent.AvatarUpdated -> launch { snackbarHostState.showSnackbar("Profile photo updated") }

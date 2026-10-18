@@ -16,18 +16,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
 
 /**
  * One disk cache (512 MB, least recently used first) shared by every player, plus
- * background prefetching of the first bytes of upcoming videos.
+ * background prefetching of the first bytes of upcoming videos (scheduled by
+ * [prefetchWhileBuffered]).
  *
  * Create a single instance per process (SimpleCache locks its directory); the
  * [com.ndizigiye.loop.di.AppContainer] owns it.
@@ -51,25 +54,56 @@ class VideoCache(context: Context, okHttpClient: OkHttpClient) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val permits = Semaphore(MAX_CONCURRENT_PREFETCHES)
-    private val jobs = mutableMapOf<String, Job>()
+    private val jobs = mutableMapOf<String, PrefetchJob>()
     private var released = false
 
     /**
      * Caches the first [bytes] of [url] in the background so playback can start
-     * without waiting for the network. Calls for a URL already being prefetched are
-     * ignored; at most a few downloads run at once.
+     * without waiting for the network. A call for a URL already being prefetched at
+     * least as far is ignored; a smaller prefetch of it is replaced by this one. At
+     * most a few downloads run at once.
      */
-    fun prefetch(url: String, bytes: Long = DEFAULT_PREFETCH_BYTES) {
+    fun prefetch(url: String, bytes: Long) {
         synchronized(jobs) {
-            if (released || jobs[url]?.isActive == true) return
+            if (released) return
+            val running = jobs[url]?.takeIf { it.job.isActive }
+            if (running != null && running.bytes >= bytes) return
             val job = scope.launch(start = CoroutineStart.LAZY) {
+                // Let the smaller download stop first; what it wrote stays cached and is skipped.
+                running?.job?.cancelAndJoin()
                 permits.withPermit { cacheHead(url, bytes) }
             }
-            jobs[url] = job
+            jobs[url] = PrefetchJob(bytes, job)
             job.invokeOnCompletion {
-                synchronized(jobs) { if (jobs[url] === job) jobs.remove(url) }
+                synchronized(jobs) { if (jobs[url]?.job === job) jobs.remove(url) }
             }
             job.start()
+        }
+    }
+
+    /**
+     * Stops every prefetch in flight, e.g. so the video on screen gets the bandwidth.
+     * Bytes already written stay cached, and a later [prefetch] continues after them.
+     */
+    fun cancelPrefetches() {
+        val running = synchronized(jobs) { jobs.values.map { it.job } }
+        running.forEach { it.cancel() }
+    }
+
+    /**
+     * Bytes of video currently on disk. Runs on the IO dispatcher.
+     * @throws IllegalStateException after [release].
+     */
+    suspend fun usedBytes(): Long = withContext(Dispatchers.IO) { cache.cacheSpace }
+
+    /**
+     * Removes every cached video. Runs on the IO dispatcher. A player or prefetch
+     * reading a removed video only goes back to the network for it.
+     * @throws IllegalStateException after [release].
+     */
+    suspend fun clear() {
+        withContext(Dispatchers.IO) {
+            for (key in cache.keys) cache.removeResource(key)
         }
     }
 
@@ -100,10 +134,11 @@ class VideoCache(context: Context, okHttpClient: OkHttpClient) {
         }
     }
 
+    private class PrefetchJob(val bytes: Long, val job: Job)
+
     private companion object {
         const val CACHE_DIR = "video-cache"
         const val MAX_CACHE_BYTES = 512L * 1024 * 1024
-        const val DEFAULT_PREFETCH_BYTES = 1_500_000L
         const val MAX_CONCURRENT_PREFETCHES = 3
     }
 }

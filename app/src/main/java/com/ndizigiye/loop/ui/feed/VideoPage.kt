@@ -33,12 +33,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import coil3.compose.AsyncImage
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.player.VideoSurface
 import com.ndizigiye.loop.ui.common.rememberResolvedUrl
+import com.ndizigiye.loop.ui.navigation.LocalPictureInPicture
+import com.ndizigiye.loop.ui.navigation.PictureInPictureVideo
 
 private val BottomScrim = Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))
 
@@ -46,10 +49,11 @@ private val BottomScrim = Brush.verticalGradient(listOf(Color.Transparent, Color
  * One full-screen video of a feed. Layers, bottom to top: the video, its thumbnail
  * until the first frame is on screen, the tap layer (tap pauses or resumes, double
  * tap likes with a heart, long press opens the options), a bottom scrim, the
- * [ActionRail], the [VideoInfo] and the [PlaybackProgress] line.
+ * [ActionRail], the [VideoInfo] and the [PlaybackProgress] line. In a
+ * picture-in-picture window only the video and its thumbnail remain.
  *
- * [isPlaying] says whether the page is meant to play right now; [isPaused] whether
- * the viewer paused it by tapping.
+ * [isPlaying] says whether the page is meant to play right now (leaving the app then
+ * continues it in picture-in-picture); [isPaused] whether the viewer paused it by tapping.
  */
 @Composable
 internal fun VideoPage(
@@ -67,6 +71,8 @@ internal fun VideoPage(
 ) {
     val thumbnailUrl = rememberResolvedUrl(video.thumbnailUrl)
     val fill = video.height >= video.width
+    val inPictureInPicture by LocalPictureInPicture.current.isActive.collectAsStateWithLifecycle()
+    PictureInPictureVideo(playing = isPlaying)
 
     var firstFrameRendered by remember(player, video.id) { mutableStateOf(false) }
     DisposableEffect(player, video.id) {
@@ -109,74 +115,77 @@ internal fun VideoPage(
             }
         }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { currentOnTogglePause() },
-                        onDoubleTap = { position ->
-                            if (currentActions.likeByDoubleTap(currentVideo)) hearts.burst(position)
-                        },
-                        onLongPress = { currentOnOpenOptions() },
-                    )
-                },
-        )
-
-        AnimatedVisibility(
-            visible = isCurrent && isPaused,
-            modifier = Modifier.align(Alignment.Center),
-            enter = fadeIn() + scaleIn(initialScale = 1.4f),
-            exit = fadeOut() + scaleOut(targetScale = 0.8f),
-        ) {
-            ShadowedIcon(
-                imageVector = Icons.Filled.PlayArrow,
-                contentDescription = "Paused",
-                tint = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.size(88.dp),
-            )
-        }
-
-        HeartBurst(state = hearts, modifier = Modifier.fillMaxSize())
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .fillMaxHeight(0.4f)
-                .background(BottomScrim),
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .navigationBarsPadding(),
-        ) {
-            ActionRail(
-                video = video,
-                isPlaying = isPlaying,
-                actions = actions,
-                onOpenComments = onOpenComments,
-                onOpenShare = onOpenShare,
+        // Picture-in-picture shows only the video: no overlays, and it takes no gestures.
+        if (!inPictureInPicture) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 4.dp, bottom = 28.dp),
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { currentOnTogglePause() },
+                            onDoubleTap = { position ->
+                                if (currentActions.likeByDoubleTap(currentVideo)) hearts.burst(position)
+                            },
+                            onLongPress = { currentOnOpenOptions() },
+                        )
+                    },
             )
-            VideoInfo(
-                video = video,
-                isCurrent = isCurrent,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .padding(start = 14.dp, end = ActionRailWidth + 16.dp, bottom = 28.dp),
-            )
-            PlaybackProgress(
-                player = player,
-                isCurrent = isCurrent,
+
+            AnimatedVisibility(
+                visible = isCurrent && isPaused,
+                modifier = Modifier.align(Alignment.Center),
+                enter = fadeIn() + scaleIn(initialScale = 1.4f),
+                exit = fadeOut() + scaleOut(targetScale = 0.8f),
+            ) {
+                ShadowedIcon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Paused",
+                    tint = Color.White.copy(alpha = 0.6f),
+                    modifier = Modifier.size(88.dp),
+                )
+            }
+
+            HeartBurst(state = hearts, modifier = Modifier.fillMaxSize())
+
+            Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.4f)
+                    .background(BottomScrim),
             )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .navigationBarsPadding(),
+            ) {
+                ActionRail(
+                    video = video,
+                    isPlaying = isPlaying,
+                    actions = actions,
+                    onOpenComments = onOpenComments,
+                    onOpenShare = onOpenShare,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 4.dp, bottom = 28.dp),
+                )
+                VideoInfo(
+                    video = video,
+                    isCurrent = isCurrent,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = ActionRailWidth + 16.dp, bottom = 28.dp),
+                )
+                PlaybackProgress(
+                    player = player,
+                    isCurrent = isCurrent,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                )
+            }
         }
     }
 }

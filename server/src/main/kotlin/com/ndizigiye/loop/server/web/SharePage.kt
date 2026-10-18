@@ -3,7 +3,10 @@ package com.ndizigiye.loop.server.web
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.common.formatCount
 
-/** Self-contained HTML for `/v/{id}`, the target of the app's share links. No external assets. */
+/**
+ * Self-contained HTML for `/v/{id}`, the target of the app's share links. No external assets.
+ * Its "Open in Loop" button is a `loop://video/{id}` deep link that the Android app handles.
+ */
 object SharePage {
     fun render(video: VideoDto): String {
         val author = video.author
@@ -41,6 +44,8 @@ object SharePage {
             |  .handle, .stats, .sound { color: #a3a8b3; font-size: 14px; }
             |  .caption { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
             |  .stats span + span::before { content: " · "; }
+            |  .open { display: block; margin-top: 16px; padding: 14px; border-radius: 12px; background: #7b5cff;
+            |          color: #fff; font-weight: 700; font-size: 17px; text-align: center; text-decoration: none; }
             |  .brand { margin-top: 20px; font-weight: 800; letter-spacing: .04em; color: #8f7cff; }
             |</style>
             |</head>
@@ -49,6 +54,7 @@ object SharePage {
             |  <div class="frame">
             |    <video src="${video.videoUrl.escape()}"$poster controls playsinline loop preload="metadata"></video>
             |  </div>
+            |  <a class="open" href="${deepLink(video.id).escape()}">Open in Loop</a>
             |  <div class="author">
             |    $avatar
             |    <div><div class="name">${author.displayName.escape()}</div><div class="handle">@${author.username.escape()}</div></div>
@@ -63,6 +69,8 @@ object SharePage {
             |
         """.trimMargin()
     }
+
+    private fun deepLink(videoId: Long): String = "loop://video/$videoId"
 
     private fun String.escape(): String = buildString(length) {
         for (c in this@escape) {

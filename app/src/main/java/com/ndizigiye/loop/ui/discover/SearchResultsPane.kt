@@ -39,6 +39,7 @@ import com.ndizigiye.loop.api.UserDto
 import com.ndizigiye.loop.ui.common.EmptyBox
 import com.ndizigiye.loop.ui.common.ErrorBox
 import com.ndizigiye.loop.ui.common.LoadingBox
+import com.ndizigiye.loop.ui.common.fullWidthItem
 import com.ndizigiye.loop.ui.common.videoGridItems
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 import com.ndizigiye.loop.ui.theme.LoopColors

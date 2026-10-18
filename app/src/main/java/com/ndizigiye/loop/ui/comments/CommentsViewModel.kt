@@ -3,6 +3,7 @@ package com.ndizigiye.loop.ui.comments
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ndizigiye.loop.api.CommentDto
+import com.ndizigiye.loop.api.PageDto
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.data.CommentRepository
 import com.ndizigiye.loop.data.PagedState
@@ -34,7 +35,9 @@ class CommentsViewModel(
     private val repository: CommentRepository,
 ) : ViewModel() {
 
-    private val paginator = Paginator(viewModelScope) { cursor -> repository.comments(video.id, cursor) }
+    private var firstLoad = true
+
+    private val paginator = Paginator(viewModelScope) { cursor -> loadComments(cursor) }
 
     /** Top-level comments. */
     val comments: StateFlow<PagedState<CommentDto>> = paginator.state
@@ -143,6 +146,13 @@ class CommentsViewModel(
                 deletesInFlight.remove(current.id)
             }
         }
+    }
+
+    /** The first load takes the page prefetched while the video played, when there is a fresh one. */
+    private suspend fun loadComments(cursor: String?): Result<PageDto<CommentDto>> {
+        val prefetched = if (cursor == null && firstLoad) repository.takePrefetchedFirstPage(video.id) else null
+        firstLoad = false
+        return prefetched?.let { Result.success(it) } ?: repository.comments(video.id, cursor)
     }
 
     private fun insertPosted(comment: CommentDto) {

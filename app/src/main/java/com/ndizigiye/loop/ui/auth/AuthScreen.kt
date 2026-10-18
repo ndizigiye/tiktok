@@ -47,6 +47,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.common.rememberBackAction
+import com.ndizigiye.loop.ui.common.rememberMessageScope
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 import com.ndizigiye.loop.ui.theme.LoopColors

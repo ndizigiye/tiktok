@@ -1,18 +1,13 @@
 package com.ndizigiye.loop.ui.create
 
-import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.SoundDto
 import com.ndizigiye.loop.data.DiscoverRepository
-import com.ndizigiye.loop.data.VideoRepository
-import com.ndizigiye.loop.data.copyUriToCache
-import com.ndizigiye.loop.data.remote.userMessage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import com.ndizigiye.loop.data.upload.UploadManager
+import com.ndizigiye.loop.data.upload.UploadState
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,10 +16,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileNotFoundException
-import java.io.IOException
 
 data class PostUiState(
     val cover: CoverState = CoverState.Loading,
@@ -43,12 +34,13 @@ sealed interface PostEvent {
 }
 
 /**
- * Publishes the video at [videoUri]: a file:// recording is uploaded as is, a
- * content:// pick is copied to the cache first (once, so retries reuse the copy).
+ * Publishes the video at [videoUri] through the app-wide [UploadManager], so the upload
+ * keeps going when the user leaves the app, and follows that upload's progress and
+ * outcome. Uploads started by other post screens are ignored.
  */
 class PostViewModel(
-    private val appContext: Context,
-    private val videoRepository: VideoRepository,
+    appContext: Context,
+    private val uploadManager: UploadManager,
     discoverRepository: DiscoverRepository,
     videoUri: String,
     private val soundId: Long?,
@@ -62,10 +54,8 @@ class PostViewModel(
     private val _events = Channel<PostEvent>(Channel.BUFFERED)
     val events: Flow<PostEvent> = _events.receiveAsFlow()
 
-    private var uploadJob: Job? = null
-
-    /** Cache copy of a content:// video; deleted once posted or when the screen goes away. */
-    private var copy: File? = null
+    /** The upload this screen started last. */
+    private var uploadId: Long? = null
 
     init {
         viewModelScope.launch {
@@ -77,70 +67,47 @@ class PostViewModel(
                 discoverRepository.sound(soundId).onSuccess { sound -> _state.update { it.copy(sound = sound) } }
             }
         }
-    }
-
-    fun post(caption: String) {
-        if (uploadJob?.isCompleted == false || _state.value.isPosted) return
-        _state.update { it.copy(isUploading = true, progress = 0f) }
-        uploadJob = viewModelScope.launch {
-            try {
-                val file = videoFile()
-                if (withContext(Dispatchers.IO) { file.length() } > ApiLimits.MAX_UPLOAD_BYTES) {
-                    _events.trySend(PostEvent.Failed(TOO_LARGE_MESSAGE))
-                    return@launch
-                }
-                videoRepository.upload(file, caption, soundId) { progress ->
-                    _state.update { it.copy(progress = progress) }
-                }
-                    .onSuccess {
-                        deleteCopy()
-                        _state.update { it.copy(isPosted = true) }
-                        _events.trySend(PostEvent.Posted)
-                    }
-                    .onFailure { error -> _events.trySend(PostEvent.Failed(error.userMessage())) }
-            } catch (e: IOException) {
-                _events.trySend(PostEvent.Failed(UNREADABLE_MESSAGE))
-            } catch (e: SecurityException) {
-                _events.trySend(PostEvent.Failed(UNREADABLE_MESSAGE))
-            } finally {
-                _state.update { it.copy(isUploading = false) }
+        viewModelScope.launch {
+            uploadManager.state.collect { upload ->
+                if (upload != null && upload.id == uploadId) onUploadChanged(upload)
             }
         }
     }
 
-    fun cancelUpload() {
-        val job = uploadJob ?: return
-        if (!job.isActive) return
-        job.cancel()
-        _events.trySend(PostEvent.Cancelled)
-    }
-
-    override fun onCleared() {
-        deleteCopy()
-    }
-
-    /** The file to upload: the recording itself, or a cache copy of picked content (reused on retry). */
-    private suspend fun videoFile(): File {
-        if (uri.scheme == ContentResolver.SCHEME_FILE) {
-            val file = uri.path?.let { File(it) }
-            if (file == null || !isFile(file)) throw FileNotFoundException(uri.toString())
-            return file
+    fun post(caption: String) {
+        val current = _state.value
+        if (current.isUploading || current.isPosted) return
+        val id = uploadManager.start(uri, caption, soundId)
+        if (id == null) {
+            _events.trySend(PostEvent.Failed(BUSY_MESSAGE))
+            return
         }
-        copy?.let { existing -> if (isFile(existing)) return existing }
-        return appContext.copyUriToCache(uri, COPY_PREFIX).also { copy = it }
+        uploadId = id
+        _state.update { it.copy(isUploading = true, progress = 0f) }
     }
 
-    private suspend fun isFile(file: File): Boolean = withContext(Dispatchers.IO) { file.isFile }
+    fun cancelUpload() {
+        val id = uploadId ?: return
+        if (_state.value.isUploading) uploadManager.cancel(id)
+    }
 
-    private fun deleteCopy() {
-        copy?.delete()
-        copy = null
+    private fun onUploadChanged(upload: UploadState) {
+        _state.update {
+            it.copy(
+                isUploading = upload is UploadState.Uploading,
+                progress = if (upload is UploadState.Uploading) upload.progress else it.progress,
+                isPosted = upload is UploadState.Posted,
+            )
+        }
+        when (upload) {
+            is UploadState.Uploading -> Unit
+            is UploadState.Posted -> _events.trySend(PostEvent.Posted)
+            is UploadState.Cancelled -> _events.trySend(PostEvent.Cancelled)
+            is UploadState.Failed -> _events.trySend(PostEvent.Failed(upload.message))
+        }
     }
 
     private companion object {
-        const val COPY_PREFIX = "upload"
-        const val UNREADABLE_MESSAGE = "Couldn't read this video. Try picking it again."
-        const val TOO_LARGE_MESSAGE =
-            "This video is too large. Videos can be up to ${ApiLimits.MAX_UPLOAD_BYTES / (1024 * 1024)} MB."
+        const val BUSY_MESSAGE = "Another video is still uploading. Try again when it's done."
     }
 }

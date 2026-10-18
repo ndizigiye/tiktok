@@ -1,5 +1,8 @@
 package com.ndizigiye.loop.ui.comments
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -41,11 +44,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
+import com.ndizigiye.loop.ui.common.rememberMessageScope
 import com.ndizigiye.loop.ui.common.rememberResolvedUrl
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.theme.LoopColors
@@ -62,9 +64,8 @@ fun ShareSheet(video: VideoDto, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val snackbarHostState = LocalSnackbarHostState.current
-    // The destination's scope outlives the sheet, so the share count and the
-    // snackbar (shown by the app once the sheet is gone) are not cut short.
-    val hostScope = LocalLifecycleOwner.current.lifecycleScope
+    // The snackbar shows once the sheet is gone, possibly after its screen closed too.
+    val messageScope = rememberMessageScope()
     val baseUrl by container.sessionStore.baseUrl.collectAsStateWithLifecycle()
     val videoUrl = rememberResolvedUrl(video.videoUrl)
     val link = shareLinkOf(baseUrl, video.id)
@@ -77,10 +78,10 @@ fun ShareSheet(video: VideoDto, onDismiss: () -> Unit) {
         }
     }
     val announce: (String) -> Unit = { message ->
-        hostScope.launch { snackbarHostState.showSnackbar(message) }
+        messageScope.launch { snackbarHostState.showSnackbar(message) }
     }
     val completed: (message: String?) -> Unit = { message ->
-        hostScope.launch { container.videoRepository.share(video) }
+        container.applicationScope.launch { container.videoRepository.share(video) }
         if (message != null) announce(message)
         close()
     }
@@ -88,6 +89,18 @@ fun ShareSheet(video: VideoDto, onDismiss: () -> Unit) {
         announce(message)
         close()
     }
+    val saveVideo: () -> Unit = {
+        val url = videoUrl
+        if (url != null && context.enqueueVideoDownload(url, video.id)) {
+            completed("Downloading...")
+        } else {
+            failed("Couldn't start the download.")
+        }
+    }
+    // Granted or not, the download starts: without the permission it goes to the app's own folder.
+    val requestStoragePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { saveVideo() }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -137,11 +150,10 @@ fun ShareSheet(video: VideoDto, onDismiss: () -> Unit) {
                     label = "Save video",
                     background = MaterialTheme.colorScheme.surfaceContainerHighest,
                     onClick = {
-                        val url = videoUrl
-                        if (url != null && context.enqueueVideoDownload(url, video.id)) {
-                            completed("Downloading...")
+                        if (context.needsStoragePermissionToSave()) {
+                            requestStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                         } else {
-                            failed("Couldn't start the download.")
+                            saveVideo()
                         }
                     },
                 )

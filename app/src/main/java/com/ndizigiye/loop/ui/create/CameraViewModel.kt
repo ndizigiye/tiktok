@@ -21,6 +21,7 @@ import androidx.lifecycle.viewModelScope
 import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.SoundDto
 import com.ndizigiye.loop.data.DiscoverRepository
+import com.ndizigiye.loop.data.TEMP_FILE_PREFIX
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -87,6 +88,7 @@ class CameraViewModel(
 
     private val recorder: Recorder = Recorder.Builder()
         .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)))
+        .setTargetVideoEncodingBitRate(TARGET_VIDEO_BITRATE)
         .build()
 
     val videoCapture: VideoCapture<Recorder> = VideoCapture.Builder(recorder)
@@ -208,7 +210,7 @@ class CameraViewModel(
     @SuppressLint("MissingPermission")
     private fun startTake() {
         if (take != null) return
-        val file = File(appContext.cacheDir, "loop-take-${System.currentTimeMillis()}.mp4")
+        val file = File(appContext.cacheDir, "${TEMP_FILE_PREFIX}take-${System.currentTimeMillis()}.mp4")
         val options = FileOutputOptions.Builder(file)
             .setDurationLimitMillis(ApiLimits.MAX_RECORDING_MS)
             .build()
@@ -297,6 +299,9 @@ class CameraViewModel(
         const val COUNTDOWN_SECONDS = 3
         const val COUNTDOWN_STEP_MS = 1_000L
         const val NANOS_PER_MILLI = 1_000_000L
+
+        /** 4 Mbit/s, so a full 60 s take is about 30 MB (docs/feature-analysis.md, question 9). */
+        const val TARGET_VIDEO_BITRATE = 4 * 1024 * 1024
     }
 }
 

@@ -9,6 +9,7 @@ import com.ndizigiye.loop.data.Paginator
 import com.ndizigiye.loop.data.VideoListSource
 import com.ndizigiye.loop.data.VideoRepository
 import com.ndizigiye.loop.data.remote.ApiException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -21,9 +22,10 @@ internal class VideoPagerViewModel(
     startIndex: Int,
     private val videoId: Long?,
     private val videoRepository: VideoRepository,
+    applicationScope: CoroutineScope,
 ) : ViewModel() {
 
-    private val viewReporter = ViewReporter(videoRepository)
+    private val viewReporter = ViewReporter(videoRepository, applicationScope)
 
     private val paginator = Paginator<VideoDto>(viewModelScope) { cursor -> load(cursor) }
 

@@ -68,6 +68,7 @@ Feature packages depend on the core packages (`di`, `data*`, `player`,
 ```kotlin
 // ---- di/AppContainer.kt
 class AppContainer(context: Context) {
+    val applicationScope: CoroutineScope      // SupervisorJob + Dispatchers.Default; work that must outlive its screen (view reports, share counts)
     val sessionStore: SessionStore
     val okHttpClient: OkHttpClient            // auth + base-URL interceptors, used by Retrofit, Coil and Media3
     val api: LoopApi
@@ -204,13 +205,17 @@ class VideoListSource(
 class VideoListHandoff { fun put(source: VideoListSource): String; fun get(key: String): VideoListSource? }
 
 // ---- data/FileUtils.kt
-suspend fun Context.copyUriToCache(uri: Uri, prefix: String): File   // IO dispatcher
+const val TEMP_FILE_PREFIX = "loop-"                                  // every Loop temp file in cacheDir starts with it
+suspend fun Context.copyUriToCache(uri: Uri, prefix: String): File   // IO dispatcher; "loop-<prefix>…"; deleted on failure/cancellation
+suspend fun Context.deleteStaleTempFiles(maxAgeMs: Long)             // LoopApplication.onCreate sweeps files older than 24 h
 fun Context.mimeTypeOf(uri: Uri): String?
 
 // ---- player/
 @UnstableApi class VideoCache(context: Context, okHttpClient: OkHttpClient) {
     val dataSourceFactory: DataSource.Factory    // CacheDataSource over OkHttpDataSource, 512 MB LRU SimpleCache
     fun prefetch(url: String, bytes: Long = 1_500_000L)   // background CacheWriter for the first bytes; de-duplicated
+    suspend fun usedBytes(): Long                         // IO dispatcher
+    suspend fun clear()                                   // IO dispatcher; readers of removed videos refetch them
     fun release()
 }
 class FeedPlayerPool(context: Context, videoCache: VideoCache, size: Int = 3) {
@@ -222,6 +227,19 @@ class FeedPlayerPool(context: Context, videoCache: VideoCache, size: Int = 3) {
 @Composable fun rememberFeedPlayerPool(): FeedPlayerPool  // released when it leaves composition
 @Composable fun VideoSurface(player: ExoPlayer?, modifier: Modifier = Modifier, fill: Boolean = true)
 // PlayerView via AndroidView, no controller, RESIZE_MODE_ZOOM when fill else FIT, black shutter.
+
+// ---- ui/common/ (besides avatar, thumbnails, caption text, follow button, state boxes, top bar)
+@Composable fun VideoGrid(videos: List<VideoDto>, onVideoClick: (index: Int) -> Unit, modifier: Modifier = Modifier,
+                          onLoadMore: () -> Unit = {}, isLoadingMore: Boolean = false, loadMoreFailed: Boolean = false,
+                          state: LazyGridState = rememberLazyGridState(), contentPadding: PaddingValues = PaddingValues(0.dp),
+                          header: LazyGridScope.() -> Unit = {}, footer: LazyGridScope.() -> Unit = {})
+fun LazyGridScope.videoGridItems(videos: List<VideoDto>, onClick: (index: Int) -> Unit)
+fun LazyGridScope.fullWidthItem(key: String, content: @Composable LazyGridItemScope.() -> Unit)
+@Composable fun LoadMoreEffect(state: LazyGridState | LazyListState, enabled: Boolean = true, onLoadMore: () -> Unit)
+//  near the end -> onLoadMore; pass enabled = false while the last page failed (no retry loop while offline)
+@Composable fun LoadingMoreFooter(modifier: Modifier = Modifier)
+@Composable fun LoadMoreErrorFooter(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier)
+@Composable fun rememberMessageScope(): CoroutineScope  // activity scope for snackbars that outlive the destination
 
 // ---- ui/navigation/
 val LocalAppContainer: ProvidableCompositionLocal<AppContainer>
@@ -294,7 +312,9 @@ Routes (`ui/navigation/Routes.kt`, `@Serializable`): `MainRoute`, `AuthRoute`,
 - Icons come from `androidx.compose.material.icons` (core + extended); no
   bitmap assets ship with the app.
 - Errors surface as text from `Throwable.userMessage()`; one-off messages use
-  the `SnackbarHostState` from `LocalSnackbarHostState`.
+  the `SnackbarHostState` from `LocalSnackbarHostState`. A message shown while
+  its screen closes is launched in `rememberMessageScope()`; a request that must
+  finish after its screen closes runs in `AppContainer.applicationScope`.
 - Actions that need an account call `LocalNavigator.current.requireAuth()` first.
 - All media URLs go through `SessionStore.resolveUrl` (`rememberResolvedUrl(path)` in `ui.common`).
 

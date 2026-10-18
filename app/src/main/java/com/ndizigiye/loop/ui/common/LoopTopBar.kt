@@ -22,8 +22,8 @@ import androidx.compose.ui.text.style.TextOverflow
 @Composable
 fun LoopTopBar(
     title: String,
-    onBack: (() -> Unit)? = rememberBackAction(),
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = rememberBackAction(),
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     CenterAlignedTopAppBar(

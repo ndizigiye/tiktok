@@ -1,17 +1,12 @@
 package com.ndizigiye.loop.ui.profile
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridItemScope
 import androidx.compose.foundation.lazy.grid.LazyGridScope
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -34,14 +29,15 @@ import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.data.PagedState
 import com.ndizigiye.loop.ui.common.EmptyBox
 import com.ndizigiye.loop.ui.common.ErrorBox
+import com.ndizigiye.loop.ui.common.LoadMoreErrorFooter
 import com.ndizigiye.loop.ui.common.LoadingBox
+import com.ndizigiye.loop.ui.common.LoadingMoreFooter
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.common.SignedOutPrompt
-import com.ndizigiye.loop.ui.common.videoGridItems
+import com.ndizigiye.loop.ui.common.VideoGrid
+import com.ndizigiye.loop.ui.common.fullWidthItem
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
-
-private const val GRID_COLUMNS = 3
 
 /**
  * A creator's profile: header, then a grid of their videos, liked videos and (on your
@@ -93,7 +89,6 @@ private fun ProfileContent(viewModel: ProfileViewModel, showBack: Boolean, modif
     LaunchedEffect(viewModel) {
         viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
     }
-    LoadMoreEffect(gridState) { viewModel.loadMore(selectedTab) }
 
     Column(
         modifier = modifier
@@ -127,85 +122,79 @@ private fun ProfileContent(viewModel: ProfileViewModel, showBack: Boolean, modif
                 onRefresh = viewModel::pullRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(GRID_COLUMNS),
+                VideoGrid(
+                    videos = tabState.items,
+                    onVideoClick = { index ->
+                        navigator.openVideoPager(
+                            videos = tabState.items,
+                            startIndex = index,
+                            nextCursor = tabState.nextCursor,
+                            loadMore = viewModel.pageLoader(selectedTab),
+                        )
+                    },
                     modifier = Modifier.fillMaxSize(),
+                    onLoadMore = { viewModel.loadMore(selectedTab) },
+                    isLoadingMore = tabState.isLoading && tabState.items.isNotEmpty(),
+                    loadMoreFailed = tabState.error != null,
                     state = gridState,
-                    horizontalArrangement = Arrangement.spacedBy(1.dp),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                ) {
-                    fullWidthItem(key = "top-bar") {
-                        ProfileTopBar(
-                            username = username,
-                            isOwn = ui.isOwn,
-                            showBack = showBack,
-                            onShare = onShare,
-                            onCopyUsername = onCopyUsername,
-                        )
-                    }
-                    fullWidthItem(key = "header") {
-                        ProfileHeader(
-                            user = user,
-                            isOwn = ui.isOwn,
-                            onFollowingClick = { navigator.openFollowList(username, showFollowers = false) },
-                            onFollowersClick = { navigator.openFollowList(username, showFollowers = true) },
-                            onEditProfile = navigator::openEditProfile,
-                            onShare = onShare,
-                        )
-                    }
-                    fullWidthItem(key = "tabs") {
-                        ProfileTabRow(tabs = ui.tabs, selected = selectedTab, onSelect = viewModel::selectTab)
-                    }
-                    tabItems(
-                        tab = selectedTab,
-                        state = tabState,
-                        isOwn = ui.isOwn,
-                        onVideoClick = { index ->
-                            navigator.openVideoPager(
-                                videos = tabState.items,
-                                startIndex = index,
-                                nextCursor = tabState.nextCursor,
-                                loadMore = viewModel.pageLoader(selectedTab),
+                    header = {
+                        fullWidthItem(key = "top-bar") {
+                            ProfileTopBar(
+                                username = username,
+                                isOwn = ui.isOwn,
+                                showBack = showBack,
+                                onShare = onShare,
+                                onCopyUsername = onCopyUsername,
                             )
-                        },
-                        onRetry = { viewModel.retry(selectedTab) },
-                    )
-                }
+                        }
+                        fullWidthItem(key = "header") {
+                            ProfileHeader(
+                                user = user,
+                                isOwn = ui.isOwn,
+                                onFollowingClick = { navigator.openFollowList(username, showFollowers = false) },
+                                onFollowersClick = { navigator.openFollowList(username, showFollowers = true) },
+                                onEditProfile = navigator::openEditProfile,
+                                onShare = onShare,
+                            )
+                        }
+                        fullWidthItem(key = "tabs") {
+                            ProfileTabRow(tabs = ui.tabs, selected = selectedTab, onSelect = viewModel::selectTab)
+                        }
+                    },
+                    footer = {
+                        tabFooterItems(
+                            tab = selectedTab,
+                            state = tabState,
+                            isOwn = ui.isOwn,
+                            onRetry = { viewModel.retry(selectedTab) },
+                        )
+                    },
+                )
             }
         }
     }
 }
 
-private fun LazyGridScope.fullWidthItem(key: String, content: @Composable LazyGridItemScope.() -> Unit) {
-    item(key = key, span = { GridItemSpan(maxLineSpan) }, contentType = key, content = content)
-}
-
-/** The selected tab's videos, or its loading, error or empty state. */
-private fun LazyGridScope.tabItems(
+/** Below the selected tab's videos: its loading, error or empty state, or the error of its next page. */
+private fun LazyGridScope.tabFooterItems(
     tab: ProfileTab,
     state: PagedState<VideoDto>,
     isOwn: Boolean,
-    onVideoClick: (index: Int) -> Unit,
     onRetry: () -> Unit,
 ) {
     val error = state.error
     when {
         state.items.isEmpty() && error != null -> fullWidthItem(key = "tab-error") {
-            ErrorBox(message = error, onRetry = onRetry, modifier = Modifier.padding(top = 16.dp))
+            ErrorBox(message = error, modifier = Modifier.padding(top = 16.dp), onRetry = onRetry)
         }
         state.items.isEmpty() && !state.loadedOnce -> fullWidthItem(key = "tab-loading") {
-            PageProgress(modifier = Modifier.padding(vertical = 48.dp))
+            LoadingMoreFooter(modifier = Modifier.padding(vertical = 32.dp))
         }
         state.items.isEmpty() -> fullWidthItem(key = "tab-empty") {
             TabEmptyState(tab = tab, isOwn = isOwn)
         }
-        else -> {
-            videoGridItems(state.items, onVideoClick)
-            if (state.isLoading) {
-                fullWidthItem(key = "tab-loading-more") { PageProgress(modifier = Modifier.padding(16.dp)) }
-            } else if (error != null) {
-                fullWidthItem(key = "tab-load-more-error") { PageError(message = error, onRetry = onRetry) }
-            }
+        error != null -> fullWidthItem(key = "tab-load-more-error") {
+            LoadMoreErrorFooter(message = error, onRetry = onRetry)
         }
     }
 }

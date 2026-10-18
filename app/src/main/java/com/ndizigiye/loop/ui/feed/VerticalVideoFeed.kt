@@ -1,5 +1,6 @@
 package com.ndizigiye.loop.ui.feed
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -22,9 +23,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.currentStateAsState
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.data.PagedState
+import com.ndizigiye.loop.player.PreloadPolicy
+import com.ndizigiye.loop.player.PrefetchRequest
+import com.ndizigiye.loop.player.prefetchWhileBuffered
 import com.ndizigiye.loop.player.rememberFeedPlayerPool
 import com.ndizigiye.loop.ui.comments.CommentsSheet
 import com.ndizigiye.loop.ui.comments.ShareSheet
@@ -33,12 +38,12 @@ import com.ndizigiye.loop.ui.common.ErrorBox
 import com.ndizigiye.loop.ui.common.LoadingBox
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 
 /** Loads the next page once the viewer settles this close to the end. */
 private const val LOAD_MORE_THRESHOLD = 3
-private const val PREFETCH_AHEAD = 3
 private const val REPORT_MESSAGE = "Thanks for letting us know"
 
 private sealed interface FeedSheet {
@@ -53,8 +58,9 @@ private sealed interface FeedSheet {
  * A full-screen, vertically swiped list of videos over [state], shared by the home
  * feed and the video pager. It shows the loading, error and empty states, pages
  * further through [onLoadMore], plays the settled page while [isActive], the screen
- * is resumed and no sheet is open, prefetches the next videos, and reports each
- * page's view through [onViewed] when it stops being current or the feed is left.
+ * is resumed and no sheet is open, prefetches the next videos and the playing
+ * video's first comments (see [PreloadPolicy]), and reports each page's view
+ * through [onViewed] when it stops being current or the feed is left.
  * [onRemove] drops a video from the list (not interested, deleted).
  */
 @Composable
@@ -158,11 +164,22 @@ private fun VideoFeedPager(
         }
     }
 
-    val aheadPaths = (current + 1..current + PREFETCH_AHEAD).map { videos.getOrNull(it)?.videoUrl }
-    LaunchedEffect(aheadPaths, baseUrl) {
-        aheadPaths.forEach { path ->
-            sessionStore.resolveUrl(path)?.let { container.videoCache.prefetch(it) }
+    // Upcoming videos are prefetched only while the one on screen is well buffered.
+    val aheadPaths = PreloadPolicy.TASKS.map { videos.getOrNull(current + it.offset)?.videoUrl }
+    LaunchedEffect(visitPlayer, aheadPaths, baseUrl) {
+        val player = visitPlayer ?: return@LaunchedEffect
+        val requests = PreloadPolicy.TASKS.zip(aheadPaths).mapNotNull { (task, path) ->
+            sessionStore.resolveUrl(path)?.let { PrefetchRequest(it, task.maxBytes) }
         }
+        container.videoCache.prefetchWhileBuffered(player, requests)
+    }
+
+    // Once the visit has played a while, its first comments are fetched so the sheet opens filled.
+    LaunchedEffect(visitPlayer, visitVideo.id) {
+        val player = visitPlayer ?: return@LaunchedEffect
+        val durationMs = visitVideo.durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
+        player.awaitPlayingFor(minOf(PreloadPolicy.COMMENTS_AFTER_MS, durationMs))
+        container.commentRepository.prefetchFirstPage(visitVideo.id)
     }
 
     LaunchedEffect(current, videos.size) {
@@ -224,6 +241,21 @@ private fun VideoFeedPager(
             onDismiss = { sheet = null },
         )
         null -> Unit
+    }
+}
+
+/**
+ * Suspends until this player has been playing for [ms] in total, sampled every
+ * [PreloadPolicy.POLL_INTERVAL_MS]. Main thread only.
+ */
+private suspend fun Player.awaitPlayingFor(ms: Long) {
+    var playedMs = 0L
+    var lastSampleMs = SystemClock.elapsedRealtime()
+    while (playedMs < ms) {
+        delay(PreloadPolicy.POLL_INTERVAL_MS)
+        val now = SystemClock.elapsedRealtime()
+        if (isPlaying) playedMs += now - lastSampleMs
+        lastSampleMs = now
     }
 }
 

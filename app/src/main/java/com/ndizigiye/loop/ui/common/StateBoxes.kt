@@ -33,8 +33,8 @@ fun LoadingBox(modifier: Modifier = Modifier) {
 @Composable
 fun ErrorBox(
     message: String,
-    onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    onRetry: (() -> Unit)? = null,
 ) {
     CenteredMessage(
         icon = Icons.Outlined.CloudOff,
@@ -52,9 +52,9 @@ fun ErrorBox(
 @Composable
 fun EmptyBox(
     title: String,
+    modifier: Modifier = Modifier,
     subtitle: String? = null,
     icon: ImageVector? = null,
-    modifier: Modifier = Modifier,
 ) {
     CenteredMessage(icon = icon, title = title, subtitle = subtitle, modifier = modifier)
 }

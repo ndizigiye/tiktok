@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.UserDto
 import com.ndizigiye.loop.data.UserRepository
 import com.ndizigiye.loop.data.copyUriToCache
@@ -90,7 +91,7 @@ class EditProfileViewModel(private val userRepository: UserRepository) : ViewMod
             val (mimeType, size) = withContext(Dispatchers.IO) {
                 (context.mimeTypeOf(uri) ?: DEFAULT_MIME_TYPE) to file.length()
             }
-            if (size > MAX_AVATAR_BYTES) {
+            if (size > ApiLimits.MAX_AVATAR_BYTES) {
                 _events.send(EditProfileEvent.Error(TOO_LARGE_MESSAGE))
                 return
             }
@@ -105,10 +106,8 @@ class EditProfileViewModel(private val userRepository: UserRepository) : ViewMod
     private companion object {
         const val AVATAR_FILE_PREFIX = "avatar"
         const val DEFAULT_MIME_TYPE = "image/jpeg"
-
-        /** The server accepts avatars up to 5 MB (docs/api.md). */
-        const val MAX_AVATAR_BYTES = 5L * 1024 * 1024
         const val UNREADABLE_IMAGE_MESSAGE = "Couldn't open that image. Try another one."
-        const val TOO_LARGE_MESSAGE = "That image is too large. Choose one under 5 MB."
+        const val TOO_LARGE_MESSAGE =
+            "That image is too large. Choose one under ${ApiLimits.MAX_AVATAR_BYTES / (1024 * 1024)} MB."
     }
 }

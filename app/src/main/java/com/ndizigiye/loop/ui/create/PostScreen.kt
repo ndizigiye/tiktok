@@ -58,19 +58,19 @@ import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.common.LoopTopBar
 import com.ndizigiye.loop.ui.common.rememberBackAction
+import com.ndizigiye.loop.ui.common.rememberMessageScope
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 import com.ndizigiye.loop.ui.navigation.MainTab
 import com.ndizigiye.loop.ui.theme.LoopColors
 import com.ndizigiye.loop.ui.theme.LoopViolet
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
  * Last step before publishing: caption with #hashtag / @mention helpers, a cover
- * frame, the sound, and an upload with progress that can be cancelled.
+ * frame, the sound, and an upload with progress that can be cancelled. The upload
+ * runs in the app-wide UploadManager and carries on when the user leaves the app.
  * [videoUri] is a file:// recording or a content:// pick.
  */
 @Composable
@@ -80,7 +80,7 @@ fun PostScreen(videoUri: String, soundId: Long?) {
     val snackbarHostState = LocalSnackbarHostState.current
     val appContext = LocalContext.current.applicationContext
     val viewModel: PostViewModel = viewModel(key = "post:$videoUri:$soundId") {
-        PostViewModel(appContext, container.videoRepository, container.discoverRepository, videoUri, soundId)
+        PostViewModel(appContext, container.uploadManager, container.discoverRepository, videoUri, soundId)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     var caption by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
@@ -88,16 +88,17 @@ fun PostScreen(videoUri: String, soundId: Long?) {
     val focusManager = LocalFocusManager.current
     val back = rememberBackAction()
     val editable = !state.isUploading && !state.isPosted
+    val messageScope = rememberMessageScope()
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(viewModel, lifecycleOwner) {
+    LaunchedEffect(viewModel, lifecycleOwner, messageScope) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.events.collect { event ->
                 when (event) {
                     PostEvent.Posted -> {
                         navigator.selectTab(MainTab.PROFILE)
                         // This screen leaves right away; the message has to outlive it.
-                        withContext(NonCancellable) { snackbarHostState.showSnackbar("Posted!") }
+                        messageScope.launch { snackbarHostState.showSnackbar("Posted!") }
                     }
                     PostEvent.Cancelled -> launch { snackbarHostState.showSnackbar("Upload cancelled") }
                     is PostEvent.Failed -> launch { snackbarHostState.showSnackbar(event.message) }
@@ -106,9 +107,11 @@ fun PostScreen(videoUri: String, soundId: Long?) {
         }
     }
 
-    // Leaving would abandon the upload, so back cancels it first.
+    // The upload survives leaving the app, but back cancels it rather than leaving it to run unseen.
     BackHandler(enabled = state.isUploading, onBack = viewModel::cancelUpload)
     val onBack: () -> Unit = { if (state.isUploading) viewModel.cancelUpload() else back() }
+    // Asks for notification access first, for the upload's progress notification.
+    val post = rememberAfterNotificationPermission { viewModel.post(caption.text) }
 
     val addToken: (String) -> Unit = { symbol ->
         caption = caption.withToken(symbol, ApiLimits.CAPTION_MAX)
@@ -154,7 +157,7 @@ fun PostScreen(videoUri: String, soundId: Long?) {
             onPost = {
                 if (navigator.requireAuth()) {
                     focusManager.clearFocus()
-                    viewModel.post(caption.text)
+                    post()
                 }
             },
             onCancel = viewModel::cancelUpload,

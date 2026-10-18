@@ -8,6 +8,7 @@ import com.ndizigiye.loop.data.PagedState
 import com.ndizigiye.loop.data.Paginator
 import com.ndizigiye.loop.data.VideoRepository
 import com.ndizigiye.loop.data.session.SessionStore
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -18,9 +19,10 @@ import kotlinx.coroutines.launch
 internal class FeedViewModel(
     videoRepository: VideoRepository,
     private val sessionStore: SessionStore,
+    applicationScope: CoroutineScope,
 ) : ViewModel() {
 
-    private val viewReporter = ViewReporter(videoRepository)
+    private val viewReporter = ViewReporter(videoRepository, applicationScope)
 
     private val forYou = Paginator<VideoDto>(viewModelScope) { cursor ->
         videoRepository.feed(FeedType.FOR_YOU, cursor)

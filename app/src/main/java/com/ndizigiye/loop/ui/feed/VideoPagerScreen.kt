@@ -41,6 +41,7 @@ fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
             startIndex = startIndex,
             videoId = videoId,
             videoRepository = container.videoRepository,
+            applicationScope = container.applicationScope,
         )
     }
     val state by viewModel.state.collectAsStateWithLifecycle()

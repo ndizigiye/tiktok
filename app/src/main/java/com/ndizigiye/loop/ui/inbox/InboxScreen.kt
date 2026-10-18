@@ -1,23 +1,17 @@
 package com.ndizigiye.loop.ui.inbox
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,9 +20,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -39,7 +31,10 @@ import com.ndizigiye.loop.api.NotificationDto
 import com.ndizigiye.loop.data.PagedState
 import com.ndizigiye.loop.ui.common.EmptyBox
 import com.ndizigiye.loop.ui.common.ErrorBox
+import com.ndizigiye.loop.ui.common.LoadMoreEffect
+import com.ndizigiye.loop.ui.common.LoadMoreErrorFooter
 import com.ndizigiye.loop.ui.common.LoadingBox
+import com.ndizigiye.loop.ui.common.LoadingMoreFooter
 import com.ndizigiye.loop.ui.common.LoopTopBar
 import com.ndizigiye.loop.ui.common.SignedOutPrompt
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
@@ -87,7 +82,7 @@ private fun SignedInInbox(userId: Long, modifier: Modifier = Modifier) {
     LaunchedEffect(viewModel, resumed) {
         if (resumed) viewModel.reload()
     }
-    NearListEndEffect(state = listState, onNearEnd = viewModel::loadMore)
+    LoadMoreEffect(state = listState, enabled = state.error == null, onLoadMore = viewModel::loadMore)
 
     Column(
         modifier = modifier
@@ -166,40 +161,6 @@ private fun LazyListScope.notificationItems(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun LoadingMoreFooter(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(24.dp),
-            color = MaterialTheme.colorScheme.primary,
-            strokeWidth = 2.dp,
-        )
-    }
-}
-
-@Composable
-private fun LoadMoreErrorFooter(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodySmall,
-            color = LoopColors.TextSecondary,
-            textAlign = TextAlign.Center,
-        )
-        TextButton(onClick = onRetry) { Text("Try again") }
     }
 }
 

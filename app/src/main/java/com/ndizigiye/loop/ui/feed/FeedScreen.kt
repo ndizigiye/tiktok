@@ -73,7 +73,11 @@ fun FeedScreen(isActive: Boolean, modifier: Modifier = Modifier) {
     val container = LocalAppContainer.current
     val navigator = LocalNavigator.current
     val viewModel: FeedViewModel = viewModel {
-        FeedViewModel(videoRepository = container.videoRepository, sessionStore = container.sessionStore)
+        FeedViewModel(
+            videoRepository = container.videoRepository,
+            sessionStore = container.sessionStore,
+            applicationScope = container.applicationScope,
+        )
     }
     val session by container.sessionStore.session.collectAsStateWithLifecycle()
     val signedIn = session != null

@@ -1,5 +1,6 @@
 package com.ndizigiye.loop.server
 
+import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.ErrorDto
 import com.ndizigiye.loop.api.UserDto
 import io.ktor.client.call.body
@@ -73,7 +74,8 @@ class MediaTest {
         assertEquals(1, File(config.dataDir, "avatars").listFiles()!!.size, "the old avatar is deleted")
 
         assertError(uploadAvatar(ByteArray(10), "image/gif"), HttpStatusCode.BadRequest, "validation")
-        assertError(uploadAvatar(ByteArray(5 * 1024 * 1024 + 1), "image/png"), HttpStatusCode.PayloadTooLarge, "too_large")
+        val tooLarge = ByteArray(ApiLimits.MAX_AVATAR_BYTES.toInt() + 1)
+        assertError(uploadAvatar(tooLarge, "image/png"), HttpStatusCode.PayloadTooLarge, "too_large")
         assertEquals(second.avatarUrl, client.get("/api/me") { bearerAuth(user.token) }.body<UserDto>().avatarUrl)
     }
 
@@ -87,6 +89,7 @@ class MediaTest {
         val html = response.bodyAsText()
         assertTrue("<video src=\"${video.videoUrl}\"" in html)
         assertTrue("controls playsinline loop" in html)
+        assertTrue("<a class=\"open\" href=\"loop://video/${video.id}\">Open in Loop</a>" in html, "deep link button")
         assertTrue("Look at this &amp; that #demo" in html)
         assertTrue("Sharer &lt;b&gt;" in html)
         assertTrue("http://" !in html && "https://" !in html, "no external assets")

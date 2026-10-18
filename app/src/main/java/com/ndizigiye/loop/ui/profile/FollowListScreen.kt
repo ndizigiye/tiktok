@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -34,7 +33,10 @@ import com.ndizigiye.loop.api.UserDto
 import com.ndizigiye.loop.data.PagedState
 import com.ndizigiye.loop.ui.common.EmptyBox
 import com.ndizigiye.loop.ui.common.ErrorBox
+import com.ndizigiye.loop.ui.common.LoadMoreEffect
+import com.ndizigiye.loop.ui.common.LoadMoreErrorFooter
 import com.ndizigiye.loop.ui.common.LoadingBox
+import com.ndizigiye.loop.ui.common.LoadingMoreFooter
 import com.ndizigiye.loop.ui.common.LoopTopBar
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
@@ -97,7 +99,7 @@ private fun FollowListPage(viewModel: FollowListViewModel, tab: FollowListTab) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(viewModel, tab) { viewModel.ensureLoaded(tab) }
-    LoadMoreEffect(listState) { viewModel.loadMore(tab) }
+    LoadMoreEffect(listState, enabled = state.error == null) { viewModel.loadMore(tab) }
 
     PullToRefreshBox(
         isRefreshing = state.isRefreshing,
@@ -149,10 +151,10 @@ private fun LazyListScope.userItems(
                 FollowUserRow(user = user, onClick = { onUserClick(user) })
             }
             if (state.isLoading) {
-                item(key = "loading-more", contentType = "footer") { PageProgress(modifier = Modifier.padding(16.dp)) }
+                item(key = "loading-more", contentType = "footer") { LoadingMoreFooter() }
             } else if (error != null) {
                 item(key = "load-more-error", contentType = "footer") {
-                    PageError(message = error, onRetry = onRetry)
+                    LoadMoreErrorFooter(message = error, onRetry = onRetry)
                 }
             }
         }

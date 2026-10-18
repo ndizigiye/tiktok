@@ -47,7 +47,7 @@ data class UploadSpec(
 
         val AVATAR = UploadSpec(
             fileField = "avatar",
-            maxBytes = 5L * 1024 * 1024,
+            maxBytes = ApiLimits.MAX_AVATAR_BYTES,
             types = mapOf(
                 "image/jpeg" to "jpg",
                 "image/png" to "png",

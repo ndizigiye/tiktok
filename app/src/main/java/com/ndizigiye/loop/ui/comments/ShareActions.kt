@@ -1,11 +1,15 @@
 package com.ndizigiye.loop.ui.comments
 
+import android.Manifest
 import android.app.Activity
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Environment
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 
 /** The public web page of a video: `<baseUrl>v/<id>` (see docs/api.md "Web"). */
@@ -29,10 +33,19 @@ internal fun Context.launchShareChooser(caption: String, link: String): Boolean 
 }
 
 /**
+ * True before Android 10 while WRITE_EXTERNAL_STORAGE is not granted: saving to the
+ * shared Movies folder needs it there. From Android 10 on DownloadManager needs none.
+ */
+internal fun Context.needsStoragePermissionToSave(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+        ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+        PackageManager.PERMISSION_GRANTED
+
+/**
  * Downloads [url] with the system DownloadManager to Movies/Loop_<id>.mp4. Before
- * Android 10 the shared Movies folder needs a storage permission the app does not
- * hold, so it falls back to the app's own Movies folder. False when no download
- * could be started.
+ * Android 10 the shared Movies folder needs WRITE_EXTERNAL_STORAGE (see
+ * [needsStoragePermissionToSave]); without it the download falls back to the app's
+ * own Movies folder. False when no download could be started.
  */
 internal fun Context.enqueueVideoDownload(url: String, videoId: Long): Boolean {
     val manager = getSystemService(DownloadManager::class.java) ?: return false
