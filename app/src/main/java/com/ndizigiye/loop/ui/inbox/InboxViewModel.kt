@@ -31,7 +31,11 @@ class InboxViewModel(private val inboxRepository: InboxRepository) : ViewModel()
 
     private var reloadJob: Job? = null
 
-    /** Reloads from the first page without showing the pull-to-refresh indicator. */
+    /**
+     * Brings the list up to date without showing the pull-to-refresh indicator. The rows
+     * already scrolled past stay (see [Paginator.sync]), so returning to the tab keeps
+     * the reader's place.
+     */
     fun reload() = startReload(byUser = false)
 
     fun pullToRefresh() = startReload(byUser = true)
@@ -49,7 +53,8 @@ class InboxViewModel(private val inboxRepository: InboxRepository) : ViewModel()
 
     private fun startReload(byUser: Boolean) {
         reloadJob?.cancel()
-        paginator.refresh()
+        // A pull happens at the top of the list, so it may as well start over from page 1.
+        if (byUser) paginator.refresh() else paginator.sync { it.id }
         _isPullRefreshing.value = byUser
         reloadJob = viewModelScope.launch {
             val settled = paginator.state.first { !it.isLoading && !it.isRefreshing }

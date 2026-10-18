@@ -13,6 +13,7 @@ class AuthRepository(
     private val sessionStore: SessionStore,
     private val interactions: InteractionStore,
     private val inboxRepository: InboxRepository,
+    private val commentRepository: CommentRepository,
 ) {
     suspend fun login(username: String, password: String): Result<UserDto> =
         apiCall { api.login(LoginRequest(username.trim().lowercase(), password)) }
@@ -26,16 +27,18 @@ class AuthRepository(
     suspend fun refreshMe(): Result<UserDto> =
         apiCall { api.me() }.onSuccess(sessionStore::updateUser)
 
-    /** Signs out locally: clears the session, interaction state and unread count. */
+    /** Signs out locally: clears the session, interaction state, prefetched comments and unread count. */
     fun logout() {
         sessionStore.clear()
         interactions.clear()
+        commentRepository.clearPrefetched()
         inboxRepository.reset()
     }
 
     private fun startSession(auth: AuthResponse): UserDto {
         // Like/follow flags loaded as another viewer are stale for the new account.
         interactions.clear()
+        commentRepository.clearPrefetched()
         inboxRepository.reset()
         sessionStore.save(auth.token, auth.user)
         return auth.user

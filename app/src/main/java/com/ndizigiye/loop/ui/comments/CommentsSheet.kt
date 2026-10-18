@@ -21,6 +21,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,9 +36,14 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.CommentDto
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.common.formatCount
@@ -65,8 +71,18 @@ private val SheetShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
 @Composable
 fun CommentsSheet(video: VideoDto, onDismiss: () -> Unit) {
     val container = LocalAppContainer.current
-    val viewModel: CommentsViewModel = viewModel(key = "comments-${video.id}") {
-        CommentsViewModel(video, container.commentRepository)
+    // The comments live as long as the sheet: scoped to the screen, a feed would keep
+    // every video's comments it ever opened.
+    val sheetStoreOwner = remember(video.id) {
+        object : ViewModelStoreOwner {
+            override val viewModelStore = ViewModelStore()
+        }
+    }
+    DisposableEffect(sheetStoreOwner) {
+        onDispose { sheetStoreOwner.viewModelStore.clear() }
+    }
+    val viewModel: CommentsViewModel = viewModel(viewModelStoreOwner = sheetStoreOwner) {
+        CommentsViewModel(video, container.commentRepository, container.applicationScope)
     }
     LaunchedEffect(viewModel) { viewModel.reload() }
 
@@ -115,8 +131,9 @@ private fun CommentsSheetContent(
     val session by container.sessionStore.session.collectAsStateWithLifecycle()
     val stats = rememberVideoStats(video)
     val me = session?.user
+    val myId = me?.id
 
-    var text by rememberSaveable { mutableStateOf("") }
+    var text by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     var replyTarget by remember { mutableStateOf<CommentDto?>(null) }
     var pendingDelete by remember { mutableStateOf<CommentDto?>(null) }
     val listState = rememberLazyListState()
@@ -128,15 +145,27 @@ private fun CommentsSheetContent(
         }
     }
 
+    // Answering a reply starts the text with "@author " (see replyMention); switching or
+    // cancelling the reply swaps that mention out again.
+    val setReplyTarget: (CommentDto?) -> Unit = { target ->
+        text = text.withMention(from = replyMention(replyTarget, myId), to = replyMention(target, myId))
+        replyTarget = target
+    }
+
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
                 is CommentsEvent.Posted -> {
-                    text = ""
+                    text = TextFieldValue()
                     replyTarget = null
                     keyboard?.hide()
                     focusManager.clearFocus()
                     if (event.comment.parentId == null) launch { listState.animateScrollToItem(0) }
+                }
+                is CommentsEvent.Deleted -> {
+                    val gone = event.comment.id
+                    // A reply to a deleted comment (or to its thread) would only be refused.
+                    if (replyTarget?.id == gone || replyTarget?.parentId == gone) setReplyTarget(null)
                 }
                 is CommentsEvent.Message -> launch { snackbarHostState.showSnackbar(event.text) }
             }
@@ -158,12 +187,11 @@ private fun CommentsSheetContent(
     }
     val startReply: (CommentDto) -> Unit = { comment ->
         if (requireAuth() && session != null) {
-            replyTarget = comment
+            setReplyTarget(comment)
             focusRequester.requestFocus()
             keyboard?.show()
         }
     }
-    val myId = me?.id
     val canDelete: (CommentDto) -> Boolean = { comment ->
         myId != null && (comment.author.id == myId || video.author.id == myId)
     }
@@ -222,9 +250,9 @@ private fun CommentsSheetContent(
             text = text,
             onTextChange = { text = it },
             replyTarget = replyTarget,
-            onCancelReply = { replyTarget = null },
+            onCancelReply = { setReplyTarget(null) },
             isPosting = isPosting,
-            onSend = { viewModel.post(text, replyTarget) },
+            onSend = { viewModel.post(text.text, replyTarget) },
             onSignedOutTap = { requireAuth() },
             focusRequester = focusRequester,
         )
@@ -240,6 +268,25 @@ private fun CommentsSheetContent(
             onDismiss = { pendingDelete = null },
         )
     }
+}
+
+/**
+ * The mention a reply to [target] starts with: the server files a reply to a reply
+ * under the top-level comment, so the text names who is answered. Null for top-level
+ * targets and for your own replies.
+ */
+private fun replyMention(target: CommentDto?, myId: Long?): String? =
+    target?.takeIf { it.parentId != null && it.author.id != myId }?.let { "@${it.author.username} " }
+
+/**
+ * This text with the mention [from] at its start replaced by [to] (either may be null);
+ * text the user has already edited away from [from] keeps its start. A changed text
+ * puts the cursor at the end.
+ */
+private fun TextFieldValue.withMention(from: String?, to: String?): TextFieldValue {
+    val body = from?.let(text::removePrefix) ?: text
+    val updated = if (to == null || body.startsWith(to)) body else (to + body).take(ApiLimits.COMMENT_MAX)
+    return if (updated == text) this else TextFieldValue(updated, selection = TextRange(updated.length))
 }
 
 @Composable

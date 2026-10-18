@@ -117,7 +117,8 @@ private fun EditProfileForm(user: UserDto) {
     // Input is capped at the limits as it is typed, so only an empty name can be invalid.
     val nameValid = name.isNotBlank()
     val changed = name.trim() != user.displayName || bio.trim() != user.bio
-    val canSave = changed && nameValid && !state.isSaving
+    // Saving closes the screen, which would cancel a photo upload still in flight.
+    val canSave = changed && nameValid && !state.isSaving && !state.isUploadingAvatar
 
     LoopTopBar(
         title = "Edit profile",

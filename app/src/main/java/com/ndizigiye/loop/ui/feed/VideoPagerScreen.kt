@@ -24,13 +24,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ndizigiye.loop.ui.common.EmptyBox
 import com.ndizigiye.loop.ui.common.rememberBackAction
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
+import com.ndizigiye.loop.ui.navigation.LocalPictureInPicture
 import com.ndizigiye.loop.ui.theme.LoopColors
 
 private val TopScrim = Brush.verticalGradient(listOf(Color(0x59000000), Color.Transparent))
 
 /**
  * Full-screen pager over a list handed off by [sourceKey] (see VideoListHandoff),
- * opened at [startIndex]. Without that list it shows just [videoId].
+ * opened at [startIndex]. Without that list it shows just [videoId]. Leaving the app
+ * while a video plays here continues it in picture-in-picture.
  */
 @Composable
 fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
@@ -45,6 +47,7 @@ fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
         )
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val inPictureInPicture by LocalPictureInPicture.current.isActive.collectAsStateWithLifecycle()
     val onBack = rememberBackAction()
 
     Box(
@@ -56,34 +59,38 @@ fun VideoPagerScreen(sourceKey: String?, startIndex: Int, videoId: Long?) {
             state = state,
             isActive = true,
             onLoadMore = viewModel::loadMore,
-            onRetry = viewModel::refresh,
+            onRetry = viewModel::retry,
             onViewed = viewModel::recordView,
             onRemove = viewModel::remove,
             modifier = Modifier.fillMaxSize(),
             initialPage = viewModel.initialPage,
+            allowPictureInPicture = true,
             emptyContent = {
                 EmptyBox(title = "No videos left here", icon = Icons.Outlined.VideocamOff)
             },
         )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(112.dp)
-                .background(TopScrim),
-        )
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .statusBarsPadding()
-                .padding(4.dp),
-        ) {
-            ShadowedIcon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = LoopColors.OverlayText,
-                modifier = Modifier.size(26.dp),
+        // A picture-in-picture window shows only the video.
+        if (!inPictureInPicture) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(112.dp)
+                    .background(TopScrim),
             )
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(4.dp),
+            ) {
+                ShadowedIcon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = LoopColors.OverlayText,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
         }
     }
 }

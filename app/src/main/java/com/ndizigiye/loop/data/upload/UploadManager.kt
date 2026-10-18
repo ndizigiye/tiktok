@@ -3,6 +3,9 @@ package com.ndizigiye.loop.data.upload
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.OsConstants
 import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.VideoDto
 import com.ndizigiye.loop.data.VideoRepository
@@ -30,7 +33,10 @@ sealed interface UploadState {
         override val id: Long,
         /** Share of the file sent so far, 0f..1f; at 1f the server is processing the video. */
         val progress: Float,
-    ) : UploadState
+    ) : UploadState {
+        /** The whole file is sent; the server publishes it whatever the app does, so it can't be cancelled. */
+        val isProcessing: Boolean get() = progress >= 1f
+    }
 
     data class Posted(override val id: Long, val video: VideoDto) : UploadState
 
@@ -61,6 +67,7 @@ class UploadManager(
 
     private var nextId = 1L
     private var job: Job? = null
+    private var uploadingUri: Uri? = null
 
     /**
      * Starts uploading [videoUri] (file:// or content://) with [caption] and [soundId].
@@ -70,16 +77,24 @@ class UploadManager(
     fun start(videoUri: Uri, caption: String, soundId: Long?): Long? {
         if (_state.value is UploadState.Uploading) return null
         val id = nextId++
+        uploadingUri = videoUri
         _state.value = UploadState.Uploading(id, progress = 0f)
         job = scope.launch { upload(id, videoUri, caption, soundId) }
         UploadService.start(appContext)
         return id
     }
 
-    /** Cancels upload [id] if it is still running. Main thread only. */
+    /**
+     * Cancels upload [id] if it is still running and its file is still being sent
+     * (see [UploadState.Uploading.isProcessing]). Main thread only.
+     */
     fun cancel(id: Long) {
+        if ((_state.value as? UploadState.Uploading)?.isProcessing == true) return
         if (finish(UploadState.Cancelled(id))) job?.cancel()
     }
+
+    /** True while [videoUri] is being uploaded, so its file is still in use. Main thread only. */
+    fun isUploading(videoUri: Uri): Boolean = _state.value is UploadState.Uploading && uploadingUri == videoUri
 
     private suspend fun upload(id: Long, videoUri: Uri, caption: String, soundId: Long?) {
         var copy: File? = null
@@ -87,6 +102,11 @@ class UploadManager(
             val file = if (videoUri.scheme == ContentResolver.SCHEME_FILE) {
                 recordingFile(videoUri)
             } else {
+                // Also checked before copying, so a pick that is too large isn't written to the cache first.
+                if ((reportedSize(videoUri) ?: 0L) > ApiLimits.MAX_UPLOAD_BYTES) {
+                    finish(UploadState.Failed(id, TOO_LARGE_MESSAGE))
+                    return
+                }
                 appContext.copyUriToCache(videoUri, COPY_PREFIX).also { copy = it }
             }
             if (withContext(Dispatchers.IO) { file.length() } > ApiLimits.MAX_UPLOAD_BYTES) {
@@ -101,13 +121,25 @@ class UploadManager(
                 .onSuccess { video -> finish(UploadState.Posted(id, video)) }
                 .onFailure { error -> finish(UploadState.Failed(id, error.userMessage())) }
         } catch (e: IOException) {
-            finish(UploadState.Failed(id, UNREADABLE_MESSAGE))
+            finish(UploadState.Failed(id, if (e.isOutOfSpace()) NO_SPACE_MESSAGE else UNREADABLE_MESSAGE))
         } catch (e: SecurityException) {
             finish(UploadState.Failed(id, UNREADABLE_MESSAGE))
         } finally {
             copy?.let { withContext(NonCancellable + Dispatchers.IO) { it.delete() } }
         }
     }
+
+    /** The size in bytes that the provider of [uri] reports, or null when it doesn't say. */
+    private suspend fun reportedSize(uri: Uri): Long? = withContext(Dispatchers.IO) {
+        val cursor = appContext.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+        cursor?.use {
+            val column = it.getColumnIndex(OpenableColumns.SIZE)
+            if (column >= 0 && it.moveToFirst() && !it.isNull(column)) it.getLong(column) else null
+        }
+    }
+
+    /** The storage filled up, e.g. while a pick was copied to the cache. */
+    private fun IOException.isOutOfSpace(): Boolean = (cause as? ErrnoException)?.errno == OsConstants.ENOSPC
 
     private suspend fun recordingFile(uri: Uri): File {
         val file = uri.path?.let { File(it) }
@@ -128,6 +160,7 @@ class UploadManager(
     private companion object {
         const val COPY_PREFIX = "upload"
         const val UNREADABLE_MESSAGE = "Couldn't read this video. Try picking it again."
+        const val NO_SPACE_MESSAGE = "Not enough storage space to prepare this video for upload."
         const val TOO_LARGE_MESSAGE =
             "This video is too large. Videos can be up to ${ApiLimits.MAX_UPLOAD_BYTES / (1024 * 1024)} MB."
     }

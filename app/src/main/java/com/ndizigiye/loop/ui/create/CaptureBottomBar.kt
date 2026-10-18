@@ -34,7 +34,7 @@ import com.ndizigiye.loop.ui.theme.LoopViolet
 /**
  * Bottom of the recorder: recorded time above the record button, "Upload" on the
  * left before anything is recorded, and "Retake" plus the continue button on the
- * right while a take is paused.
+ * right while a take is paused or finished.
  */
 @Composable
 internal fun CaptureBottomBar(
@@ -48,7 +48,7 @@ internal fun CaptureBottomBar(
 ) {
     val counting = state.countdown != null
     val showUpload = !state.hasTake && !counting
-    val showFinish = state.phase == CapturePhase.FINALIZING ||
+    val showFinish = state.phase == CapturePhase.FINALIZING || state.phase == CapturePhase.FINISHED ||
         (state.phase == CapturePhase.PAUSED && state.recordedMs > 0 && !counting)
 
     Column(
@@ -81,7 +81,7 @@ internal fun CaptureBottomBar(
                         icon = Icons.Filled.Replay,
                         label = "Retake",
                         onClick = onRetake,
-                        enabled = state.phase == CapturePhase.PAUSED,
+                        enabled = state.phase == CapturePhase.PAUSED || state.phase == CapturePhase.FINISHED,
                     )
                     FinishButton(finalizing = state.phase == CapturePhase.FINALIZING, onClick = onFinish)
                 }

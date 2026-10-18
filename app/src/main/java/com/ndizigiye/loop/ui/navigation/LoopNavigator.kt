@@ -54,8 +54,15 @@ class LoopNavigator(
         navController.navigate(SearchRoute) { launchSingleTop = true }
     }
 
+    /**
+     * Opens the auth screen, or returns to the one already on the back stack (e.g. below
+     * Settings, opened from its server footer): only the screen that logs in closes, so a
+     * second one would leave the first behind with an empty form.
+     */
     fun openAuth() {
-        navController.navigate(AuthRoute) { launchSingleTop = true }
+        if (!navController.popBackStack(route = AuthRoute, inclusive = false)) {
+            navController.navigate(AuthRoute) { launchSingleTop = true }
+        }
     }
 
     /** Opens the recorder; callers check [requireAuth] first. */

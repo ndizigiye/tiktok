@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.ndizigiye.loop.data.AuthRepository
 import com.ndizigiye.loop.data.session.Session
 import com.ndizigiye.loop.data.session.SessionStore
+import com.ndizigiye.loop.ui.discover.RecentSearchStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +30,7 @@ class SettingsViewModel(
     private val authRepository: AuthRepository,
     private val okHttpClient: OkHttpClient,
     private val videoCacheStorage: VideoCacheStorage,
+    private val recentSearches: RecentSearchStore,
 ) : ViewModel() {
 
     val session: StateFlow<Session?> = sessionStore.session
@@ -69,8 +71,10 @@ class SettingsViewModel(
         _connection.value = ConnectionCheck.Idle
     }
 
+    /** Signs out and forgets the recent searches, so the next account on this device doesn't see them. */
     fun logout() {
         authRepository.logout()
+        recentSearches.clear()
     }
 
     fun refreshStorage() {

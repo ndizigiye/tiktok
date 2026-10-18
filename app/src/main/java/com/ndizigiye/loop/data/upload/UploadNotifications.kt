@@ -47,7 +47,8 @@ internal object UploadNotifications {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .addAction(0, "Cancel", cancelIntent(context))
+            // Once the server is processing the video it is published anyway (UploadState.Uploading.isProcessing).
+            .apply { if (!processing) addAction(0, "Cancel", cancelIntent(context)) }
             .build()
     }
 

@@ -108,6 +108,7 @@ fun PostScreen(videoUri: String, soundId: Long?) {
     }
 
     // The upload survives leaving the app, but back cancels it rather than leaving it to run unseen.
+    // While the server processes the video it can't be cancelled any more, and back waits for the result.
     BackHandler(enabled = state.isUploading, onBack = viewModel::cancelUpload)
     val onBack: () -> Unit = { if (state.isUploading) viewModel.cancelUpload() else back() }
     // Asks for notification access first, for the upload's progress notification.
@@ -256,15 +257,17 @@ private fun PostFooter(
     }
 }
 
+/** Progress of the upload; it can be cancelled until the whole file is sent and the server processes it. */
 @Composable
 private fun UploadProgress(progress: Float, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+    val processing = progress >= 1f
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = if (progress >= 1f) "Processing..." else "Uploading... ${(progress * 100).roundToInt()}%",
+                text = if (processing) "Processing..." else "Uploading... ${(progress * 100).roundToInt()}%",
                 style = MaterialTheme.typography.bodyMedium,
             )
             LinearProgressIndicator(
@@ -274,7 +277,7 @@ private fun UploadProgress(progress: Float, onCancel: () -> Unit, modifier: Modi
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
-        TextButton(onClick = onCancel) { Text("Cancel") }
+        if (!processing) TextButton(onClick = onCancel) { Text("Cancel") }
     }
 }
 

@@ -62,7 +62,7 @@ fun CameraScreen(soundId: Long?) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val viewModel: CameraViewModel = viewModel(key = "camera:$soundId") {
-        CameraViewModel(appContext, container.discoverRepository, soundId)
+        CameraViewModel(appContext, container.discoverRepository, container.uploadManager, soundId)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val permissions = rememberCapturePermissionState()
@@ -71,7 +71,10 @@ fun CameraScreen(soundId: Long?) {
     val showMessage: (String) -> Unit = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
 
     val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) navigator.openPost(uri.toString(), soundId)
+        if (uri != null) {
+            appContext.keepReadAccess(uri)
+            navigator.openPost(uri.toString(), soundId)
+        }
     }
     val openGallery: () -> Unit = {
         try {
@@ -183,11 +186,15 @@ private fun CameraCapture(
     }
     val controlsVisible = state.countdown == null &&
         (state.phase == CapturePhase.IDLE || state.phase == CapturePhase.PAUSED)
+    // A take is recorded hands-free for up to a minute, longer than a typical screen timeout.
+    val keepScreenOn = state.countdown != null ||
+        state.phase == CapturePhase.RECORDING || state.phase == CapturePhase.PAUSED
 
     Box(modifier = modifier.fillMaxSize()) {
         CameraPreview(
             videoCapture = viewModel.videoCapture,
             lensFacing = state.lensFacing,
+            keepScreenOn = keepScreenOn,
             onBound = { boundCamera = it },
             onError = onError,
             modifier = Modifier.fillMaxSize(),
@@ -234,7 +241,8 @@ private fun CameraCapture(
             }
             CaptureBottomBar(
                 state = state,
-                recordEnabled = camera != null && !state.recorderBusy && state.phase != CapturePhase.FINALIZING,
+                recordEnabled = camera != null && !state.recorderBusy &&
+                    state.phase != CapturePhase.FINALIZING && state.phase != CapturePhase.FINISHED,
                 onRecord = viewModel::onRecordClick,
                 onUpload = onUpload,
                 onRetake = onRetake,

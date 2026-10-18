@@ -18,10 +18,15 @@ object PreloadPolicy {
     /** How often the feed samples the current player while it is active. */
     const val POLL_INTERVAL_MS = 250L
 
-    /** Next video up to 2 MB, the one after up to 512 KB. */
+    /**
+     * The next video already loads in its pooled player (see [FeedPlayerPool]); a
+     * prefetch of it could not be cached while that player holds it. So the tasks
+     * start after it: the first video without a player up to 2 MB, the one after up
+     * to 512 KB.
+     */
     val TASKS: List<PreloadTask> = listOf(
-        PreloadTask(offset = 1, maxBytes = 2L * 1024 * 1024),
-        PreloadTask(offset = 2, maxBytes = 512L * 1024),
+        PreloadTask(offset = 2, maxBytes = 2L * 1024 * 1024),
+        PreloadTask(offset = 3, maxBytes = 512L * 1024),
     )
 
     /** Playing time on a page (or one full play of a shorter video) before its first comments are fetched. */

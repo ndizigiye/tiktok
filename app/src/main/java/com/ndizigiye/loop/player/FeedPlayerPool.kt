@@ -38,7 +38,8 @@ class FeedPlayerPool(
     /**
      * The player for page [index], prepared with [url] (an absolute URL), repeating
      * and paused unless [index] is the current page. The media item is only replaced
-     * when the slot held a different URL.
+     * when the slot held a different URL; a player stopped by a playback error (e.g.
+     * a load that failed while offline) is prepared again.
      */
     fun acquire(index: Int, url: String): ExoPlayer {
         val slot = slotOf(index)
@@ -49,13 +50,17 @@ class FeedPlayerPool(
             player.playWhenReady = index == currentIndex && playCurrent
             player.setMediaItem(MediaItem.fromUri(url))
             player.prepare()
-        } else if (index == currentIndex) {
-            player.playWhenReady = playCurrent
+        } else {
+            if (index == currentIndex) player.playWhenReady = playCurrent
+            player.retryAfterError()
         }
         return player
     }
 
-    /** Plays (or pauses, when [play] is false) page [index]; pauses and rewinds the others. */
+    /**
+     * Plays (or pauses, when [play] is false) page [index], preparing it again after a
+     * playback error; pauses and rewinds the others.
+     */
     fun setCurrent(index: Int, play: Boolean) {
         currentIndex = index
         playCurrent = play
@@ -63,6 +68,7 @@ class FeedPlayerPool(
             val player = players[slot] ?: continue
             if (pageIndices[slot] == index) {
                 player.playWhenReady = play
+                player.retryAfterError()
             } else if (player.playWhenReady || player.currentPosition != 0L) {
                 player.pause()
                 player.seekTo(0)
@@ -87,6 +93,11 @@ class FeedPlayerPool(
     }
 
     private fun slotOf(index: Int): Int = index.mod(size)
+
+    /** An error leaves the player idle until it is prepared again; it resumes from its position. */
+    private fun ExoPlayer.retryAfterError() {
+        if (playerError != null) prepare()
+    }
 
     private fun createPlayer(): ExoPlayer {
         val loadControl = DefaultLoadControl.Builder()

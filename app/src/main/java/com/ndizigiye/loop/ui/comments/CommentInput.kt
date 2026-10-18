@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ndizigiye.loop.api.ApiLimits
@@ -57,8 +58,8 @@ private val InputAvatarSize = 32.dp
 @Composable
 internal fun CommentInput(
     me: UserDto?,
-    text: String,
-    onTextChange: (String) -> Unit,
+    text: TextFieldValue,
+    onTextChange: (TextFieldValue) -> Unit,
     replyTarget: CommentDto?,
     onCancelReply: () -> Unit,
     isPosting: Boolean,
@@ -67,7 +68,7 @@ internal fun CommentInput(
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
-    val canSend = me != null && text.isNotBlank() && !isPosting
+    val canSend = me != null && text.text.isNotBlank() && !isPosting
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -156,15 +157,15 @@ private fun ReplyingToRow(username: String, onCancel: () -> Unit) {
 
 @Composable
 private fun CommentField(
-    text: String,
-    onTextChange: (String) -> Unit,
+    text: TextFieldValue,
+    onTextChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
     BasicTextField(
         value = text,
-        onValueChange = { onTextChange(it.take(ApiLimits.COMMENT_MAX)) },
+        onValueChange = { onTextChange(it.copy(text = it.text.take(ApiLimits.COMMENT_MAX))) },
         modifier = modifier.focusRequester(focusRequester),
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
         keyboardOptions = KeyboardOptions(
@@ -176,7 +177,7 @@ private fun CommentField(
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         decorationBox = { innerTextField ->
             FieldFrame {
-                if (text.isEmpty()) {
+                if (text.text.isEmpty()) {
                     Text(text = PLACEHOLDER, style = MaterialTheme.typography.bodyMedium, color = LoopColors.TextMuted)
                 }
                 innerTextField()

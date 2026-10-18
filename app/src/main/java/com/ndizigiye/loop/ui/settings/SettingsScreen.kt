@@ -15,12 +15,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.common.LoopTopBar
 import com.ndizigiye.loop.ui.common.rememberMessageScope
+import com.ndizigiye.loop.ui.discover.RecentSearchStore
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 import com.ndizigiye.loop.ui.navigation.MainTab
@@ -32,12 +34,14 @@ fun SettingsScreen() {
     val container = LocalAppContainer.current
     val navigator = LocalNavigator.current
     val snackbarHostState = LocalSnackbarHostState.current
+    val context = LocalContext.current
     val viewModel: SettingsViewModel = viewModel {
         SettingsViewModel(
             sessionStore = container.sessionStore,
             authRepository = container.authRepository,
             okHttpClient = container.okHttpClient,
             videoCacheStorage = VideoCacheStorage { container.videoCache },
+            recentSearches = RecentSearchStore(context.applicationContext),
         )
     }
     val session by viewModel.session.collectAsStateWithLifecycle()

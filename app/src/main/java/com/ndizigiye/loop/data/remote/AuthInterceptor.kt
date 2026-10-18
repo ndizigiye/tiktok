@@ -41,8 +41,9 @@ class AuthInterceptor(
         if (url.host == BaseUrlInterceptor.PLACEHOLDER_HOST) return url.encodedPath
         val base = sessionStore.baseUrl.value.toHttpUrlOrNull() ?: return null
         if (url.host != base.host || url.port != base.port) return null
+        // Match whole segments: with the server under "/loop", "/loopy/..." is someone else.
         val prefix = base.encodedPath.trimEnd('/')
-        return if (url.encodedPath.startsWith(prefix)) url.encodedPath.removePrefix(prefix) else null
+        return if (url.encodedPath.startsWith("$prefix/")) url.encodedPath.removePrefix(prefix) else null
     }
 
     private companion object {

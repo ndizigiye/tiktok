@@ -8,13 +8,11 @@ internal data class WatchResult(val watchedMs: Long, val completed: Boolean)
 
 /**
  * Measures one visit of a feed page: the wall-clock time [player] actually played
- * and whether the video was watched to the end (it looped, or the time watched
- * reached the duration). Main thread only.
+ * and whether playback reached the end, seen as a loop since feed players repeat
+ * their video (the time played can't tell: speed and seeking change what it covers).
+ * Main thread only.
  */
-internal class WatchTracker(
-    private val player: Player,
-    private val durationMs: Long,
-) : Player.Listener {
+internal class WatchTracker(private val player: Player) : Player.Listener {
 
     private var watchedMs = 0L
     private var playingSinceMs = NOT_PLAYING
@@ -29,9 +27,7 @@ internal class WatchTracker(
     fun stop(): WatchResult {
         stopClock()
         player.removeListener(this)
-        val duration = durationMs.takeIf { it > 0L } ?: player.duration.takeIf { it > 0L }
-        val completed = looped || (duration != null && watchedMs >= duration)
-        return WatchResult(watchedMs, completed)
+        return WatchResult(watchedMs, completed = looped)
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {

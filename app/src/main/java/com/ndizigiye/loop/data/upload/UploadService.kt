@@ -20,8 +20,8 @@ import kotlinx.coroutines.launch
 /**
  * Foreground service of type dataSync for as long as an [UploadManager] upload runs, so
  * the upload carries on when the user leaves the app. Its notification shows the
- * progress (with a cancel action) and is then replaced by the result. Runs without a
- * visible notification when the user has turned notifications off.
+ * progress (with a cancel action while the file is sent) and is then replaced by the
+ * result. Runs without a visible notification when the user has turned notifications off.
  */
 class UploadService : Service() {
 

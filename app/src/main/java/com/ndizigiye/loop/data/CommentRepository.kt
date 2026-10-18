@@ -5,6 +5,7 @@ import com.ndizigiye.loop.api.CreateCommentRequest
 import com.ndizigiye.loop.api.PageDto
 import com.ndizigiye.loop.api.ToggleResultDto
 import com.ndizigiye.loop.api.VideoDto
+import com.ndizigiye.loop.data.remote.ApiException
 import com.ndizigiye.loop.data.remote.LoopApi
 import com.ndizigiye.loop.data.remote.apiCall
 import kotlin.time.Duration.Companion.seconds
@@ -62,6 +63,17 @@ class CommentRepository(
         freshPage(videoId)?.also { prefetched.remove(videoId) }
     }
 
+    /**
+     * Drops every prefetched page, including those still in flight, e.g. when the
+     * signed-in account changes: their `likedByMe` flags belong to the previous viewer.
+     */
+    fun clearPrefetched() {
+        synchronized(prefetched) {
+            prefetched.clear()
+            prefetchTokens.clear()
+        }
+    }
+
     /** Replies to a top-level comment, oldest first. */
     suspend fun replies(commentId: Long, cursor: String?): Result<PageDto<CommentDto>> =
         apiCall { api.replies(commentId, cursor) }
@@ -78,9 +90,13 @@ class CommentRepository(
     suspend fun setLiked(commentId: Long, liked: Boolean): Result<ToggleResultDto> =
         apiCall { if (liked) api.likeComment(commentId) else api.unlikeComment(commentId) }
 
-    /** Deletes [comment] (and its replies) and lowers the video's comment count accordingly. */
+    /**
+     * Deletes [comment] (and its replies) and lowers the video's comment count accordingly.
+     * A comment that is already gone, e.g. removed by the video author, counts as deleted.
+     */
     suspend fun delete(video: VideoDto, comment: CommentDto): Result<Unit> =
         apiCall { api.deleteComment(comment.id) }
+            .recoverCatching { error -> if (error is ApiException && error.status == 404) Unit else throw error }
             .onSuccess {
                 invalidatePrefetched(video.id)
                 interactions.update(video) {

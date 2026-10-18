@@ -9,7 +9,9 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,7 +20,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +38,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import coil3.compose.AsyncImage
@@ -42,6 +47,7 @@ import com.ndizigiye.loop.player.VideoSurface
 import com.ndizigiye.loop.ui.common.rememberResolvedUrl
 import com.ndizigiye.loop.ui.navigation.LocalPictureInPicture
 import com.ndizigiye.loop.ui.navigation.PictureInPictureVideo
+import com.ndizigiye.loop.ui.theme.LoopColors
 
 private val BottomScrim = Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))
 
@@ -52,8 +58,10 @@ private val BottomScrim = Brush.verticalGradient(listOf(Color.Transparent, Color
  * [ActionRail], the [VideoInfo] and the [PlaybackProgress] line. In a
  * picture-in-picture window only the video and its thumbnail remain.
  *
- * [isPlaying] says whether the page is meant to play right now (leaving the app then
- * continues it in picture-in-picture); [isPaused] whether the viewer paused it by tapping.
+ * [isPlaying] says whether the page is meant to play right now (with
+ * [allowPictureInPicture], leaving the app then continues it in picture-in-picture);
+ * [isPaused] whether the viewer paused it by tapping. When [player] fails, the current
+ * page says so and a tap prepares it again.
  */
 @Composable
 internal fun VideoPage(
@@ -62,6 +70,7 @@ internal fun VideoPage(
     isCurrent: Boolean,
     isPlaying: Boolean,
     isPaused: Boolean,
+    allowPictureInPicture: Boolean,
     actions: VideoActions,
     onTogglePause: () -> Unit,
     onOpenOptions: () -> Unit,
@@ -72,13 +81,18 @@ internal fun VideoPage(
     val thumbnailUrl = rememberResolvedUrl(video.thumbnailUrl)
     val fill = video.height >= video.width
     val inPictureInPicture by LocalPictureInPicture.current.isActive.collectAsStateWithLifecycle()
-    PictureInPictureVideo(playing = isPlaying)
+    PictureInPictureVideo(playing = allowPictureInPicture && isPlaying)
 
     var firstFrameRendered by remember(player, video.id) { mutableStateOf(false) }
+    var playbackFailed by remember(player, video.id) { mutableStateOf(player?.playerError != null) }
     DisposableEffect(player, video.id) {
         val listener = object : Player.Listener {
             override fun onRenderedFirstFrame() {
                 firstFrameRendered = true
+            }
+
+            override fun onPlayerErrorChanged(error: PlaybackException?) {
+                playbackFailed = error != null
             }
         }
         player?.addListener(listener)
@@ -87,6 +101,7 @@ internal fun VideoPage(
 
     val hearts = rememberHeartBurstState()
     val currentVideo by rememberUpdatedState(video)
+    val currentPlayer by rememberUpdatedState(player)
     val currentActions by rememberUpdatedState(actions)
     val currentOnTogglePause by rememberUpdatedState(onTogglePause)
     val currentOnOpenOptions by rememberUpdatedState(onOpenOptions)
@@ -122,7 +137,11 @@ internal fun VideoPage(
                     .fillMaxSize()
                     .pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { currentOnTogglePause() },
+                            onTap = {
+                                // A tap on a video that failed to play tries it again instead of pausing it.
+                                val failedPlayer = currentPlayer?.takeIf { it.playerError != null }
+                                if (failedPlayer != null) failedPlayer.prepare() else currentOnTogglePause()
+                            },
                             onDoubleTap = { position ->
                                 if (currentActions.likeByDoubleTap(currentVideo)) hearts.burst(position)
                             },
@@ -132,7 +151,7 @@ internal fun VideoPage(
             )
 
             AnimatedVisibility(
-                visible = isCurrent && isPaused,
+                visible = isCurrent && isPaused && !playbackFailed,
                 modifier = Modifier.align(Alignment.Center),
                 enter = fadeIn() + scaleIn(initialScale = 1.4f),
                 exit = fadeOut() + scaleOut(targetScale = 0.8f),
@@ -143,6 +162,10 @@ internal fun VideoPage(
                     tint = Color.White.copy(alpha = 0.6f),
                     modifier = Modifier.size(88.dp),
                 )
+            }
+
+            if (isCurrent && playbackFailed) {
+                PlaybackError(modifier = Modifier.align(Alignment.Center))
             }
 
             HeartBurst(state = hearts, modifier = Modifier.fillMaxSize())
@@ -187,5 +210,32 @@ internal fun VideoPage(
                 )
             }
         }
+    }
+}
+
+/** Shown over a video that failed to play; the page's tap layer retries it. */
+@Composable
+private fun PlaybackError(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(horizontal = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        ShadowedIcon(
+            imageVector = Icons.Rounded.Refresh,
+            contentDescription = null,
+            tint = LoopColors.OverlayText,
+            modifier = Modifier.size(48.dp),
+        )
+        Text(
+            text = "Couldn't play this video",
+            style = MaterialTheme.typography.titleMedium.copy(shadow = OverlayTextShadow),
+            color = LoopColors.OverlayText,
+        )
+        Text(
+            text = "Tap to try again",
+            style = MaterialTheme.typography.bodyMedium.copy(shadow = OverlayTextShadow),
+            color = LoopColors.OverlayText.copy(alpha = 0.8f),
+        )
     }
 }

@@ -1,5 +1,6 @@
 package com.ndizigiye.loop.data
 
+import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.PageDto
 import com.ndizigiye.loop.data.remote.userMessage
 import kotlinx.coroutines.CoroutineScope
@@ -44,18 +45,39 @@ class Paginator<T>(
         }
         job = scope.launch {
             load(null)
-                .onSuccess { page ->
-                    _state.value = PagedState(
-                        items = page.items,
-                        nextCursor = page.nextCursor,
-                        endReached = page.nextCursor == null,
-                        loadedOnce = true,
-                    )
-                }
+                .onSuccess { page -> _state.value = firstPageState(page) }
                 .onFailure { error ->
                     _state.update {
                         it.copy(isLoading = false, isRefreshing = false, error = error.userMessage())
                     }
+                }
+        }
+    }
+
+    /**
+     * Like [refresh], but without losing the reader's place: a list of one page is
+     * simply refreshed; a longer one gets the fresh first page in front of the items
+     * that followed it (matched by [key]), so a scrolled list keeps its position.
+     */
+    fun sync(key: (T) -> Any) {
+        if (_state.value.items.size <= ApiLimits.DEFAULT_PAGE_SIZE) {
+            refresh()
+            return
+        }
+        job?.cancel()
+        _state.update { it.copy(isLoading = false, isRefreshing = true, error = null) }
+        job = scope.launch {
+            load(null)
+                .onSuccess { page ->
+                    val merged = mergeFirstPage(_state.value.items, page.items, key)
+                    if (merged != null) {
+                        _state.update { it.copy(items = merged, isRefreshing = false) }
+                    } else {
+                        _state.value = firstPageState(page)
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(isRefreshing = false, error = error.userMessage()) }
                 }
         }
     }
@@ -92,4 +114,23 @@ class Paginator<T>(
     fun update(transform: (List<T>) -> List<T>) {
         _state.update { it.copy(items = transform(it.items)) }
     }
+
+    private fun firstPageState(page: PageDto<T>) = PagedState(
+        items = page.items,
+        nextCursor = page.nextCursor,
+        endReached = page.nextCursor == null,
+        loadedOnce = true,
+    )
+}
+
+/**
+ * [firstPage] followed by the items of [current] after the first page's last item,
+ * without duplicates; null when the two lists no longer overlap.
+ */
+private fun <T> mergeFirstPage(current: List<T>, firstPage: List<T>, key: (T) -> Any): List<T>? {
+    val anchor = key(firstPage.lastOrNull() ?: return null)
+    val anchorIndex = current.indexOfFirst { key(it) == anchor }
+    if (anchorIndex < 0) return null
+    val freshKeys = firstPage.mapTo(HashSet(), key)
+    return firstPage + current.drop(anchorIndex + 1).filterNot { key(it) in freshKeys }
 }

@@ -55,6 +55,15 @@ class DiscoverViewModel(
                 .drop(1)
                 .collect { load(userInitiated = false) }
         }
+        // Another server's ids and media paths mean nothing on the new one: start over.
+        viewModelScope.launch {
+            sessionStore.baseUrl
+                .drop(1)
+                .collect {
+                    _state.value = DiscoverUiState()
+                    load(userInitiated = false)
+                }
+        }
     }
 
     /** Pull to refresh. */

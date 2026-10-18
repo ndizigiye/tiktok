@@ -2,10 +2,10 @@ package com.ndizigiye.loop.ui.profile
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.PageDto
 import com.ndizigiye.loop.api.UserDto
 import com.ndizigiye.loop.api.VideoDto
+import com.ndizigiye.loop.data.InteractionStore
 import com.ndizigiye.loop.data.PagedState
 import com.ndizigiye.loop.data.Paginator
 import com.ndizigiye.loop.data.UserRepository
@@ -53,6 +53,7 @@ class ProfileViewModel(
     val username: String,
     private val userRepository: UserRepository,
     private val videoRepository: VideoRepository,
+    private val interactions: InteractionStore,
     private val sessionStore: SessionStore,
 ) : ViewModel() {
 
@@ -65,8 +66,10 @@ class ProfileViewModel(
     private val liked = Paginator(viewModelScope) { cursor -> load(ProfileTab.LIKED, cursor) }
     private val bookmarks = Paginator(viewModelScope) { cursor -> load(ProfileTab.BOOKMARKS, cursor) }
 
+    /** Tabs to bring up to date when they are next selected; every visit marks them all. */
+    private val staleTabs = mutableSetOf<ProfileTab>()
+
     private var userJob: Job? = null
-    private var syncJob: Job? = null
 
     /** One-off messages for the snackbar. */
     val messages: Flow<String> = _messages.receiveAsFlow()
@@ -80,11 +83,26 @@ class ProfileViewModel(
             initialValue = buildState(userLoad.value, sessionStore.session.value, requestedTab.value, false),
         )
 
+    init {
+        // A video deleted from the pager would otherwise stay in the grids until they reload.
+        viewModelScope.launch {
+            videoRepository.deletedVideos.collect { videoId ->
+                for (tab in ProfileTab.entries) {
+                    paginator(tab).update { list -> list.filterNot { it.id == videoId } }
+                }
+            }
+        }
+    }
+
     fun tabState(tab: ProfileTab): StateFlow<PagedState<VideoDto>> = paginator(tab).state
 
-    /** Reloads the user and brings the selected tab up to date; called whenever the screen is shown. */
+    /**
+     * Reloads the user and brings the selected tab up to date; called whenever the screen
+     * is shown. The other tabs catch up when they are selected.
+     */
     fun refresh() {
         loadUser()
+        staleTabs += ProfileTab.entries
         syncTab(currentTab())
     }
 
@@ -92,7 +110,6 @@ class ProfileViewModel(
     fun pullRefresh() {
         if (pullRefreshing.value) return
         pullRefreshing.value = true
-        syncJob?.cancel()
         loadUser()
         val tabPaginator = paginator(currentTab())
         tabPaginator.refresh()
@@ -111,9 +128,7 @@ class ProfileViewModel(
 
     fun selectTab(tab: ProfileTab) {
         requestedTab.value = tab
-        val paginator = paginator(tab)
-        val state = paginator.state.value
-        if (!state.loadedOnce && !state.isLoading) paginator.refresh()
+        if (!paginator(tab).state.value.loadedOnce || tab in staleTabs) syncTab(tab)
     }
 
     /** Next page of [tab]; ignored before its first page and after an error (see [retry]). */
@@ -159,31 +174,32 @@ class ProfileViewModel(
     }
 
     /**
-     * Brings [tab] up to date without losing the reader's place: a list of one page is
-     * simply reloaded; a longer one gets the fresh first page in front of the items
-     * that followed it, so the grid keeps its scroll position.
+     * Brings [tab] up to date without losing the reader's place (see [Paginator.sync]).
+     * Videos the viewer has since unliked or unsaved leave their own Liked and Saved
+     * grids at once, including those past the first page.
      */
     private fun syncTab(tab: ProfileTab) {
         val paginator = paginator(tab)
         val state = paginator.state.value
         if (state.isLoading || state.isRefreshing) return
-        if (state.items.size <= ApiLimits.DEFAULT_PAGE_SIZE) {
-            paginator.refresh()
-            return
-        }
-        syncJob?.cancel()
-        syncJob = viewModelScope.launch {
-            load(tab, null).onSuccess { page ->
-                val merged = mergeFirstPage(paginator.state.value.items, page.items)
-                if (merged != null) paginator.update { merged } else paginator.refresh()
-            }
-        }
+        staleTabs -= tab
+        stillListed(tab)?.let { keep -> paginator.update { list -> list.filter(keep) } }
+        paginator.sync { it.id }
     }
 
-    private fun currentTab(): ProfileTab {
-        val isOwn = sessionStore.currentUser?.username.equals(username, ignoreCase = true)
-        return effectiveTab(requestedTab.value, isOwn)
+    /**
+     * Whether a video still belongs in [tab] going by the viewer's own likes and saves;
+     * null when those do not decide it (videos, or someone else's likes).
+     */
+    private fun stillListed(tab: ProfileTab): ((VideoDto) -> Boolean)? = when {
+        tab == ProfileTab.BOOKMARKS -> { video -> interactions.statsFor(video).bookmarked }
+        tab == ProfileTab.LIKED && isOwn() -> { video -> interactions.statsFor(video).liked }
+        else -> null
     }
+
+    private fun isOwn(): Boolean = sessionStore.currentUser?.username.equals(username, ignoreCase = true)
+
+    private fun currentTab(): ProfileTab = effectiveTab(requestedTab.value, isOwn())
 
     private fun buildState(load: UserLoad, session: Session?, tab: ProfileTab, pulling: Boolean): ProfileUiState {
         val me = session?.user?.takeIf { it.username.equals(username, ignoreCase = true) }
@@ -213,15 +229,3 @@ class ProfileViewModel(
 
 private fun effectiveTab(requested: ProfileTab, isOwn: Boolean): ProfileTab =
     requested.takeIf { it in ProfileTab.visibleTo(isOwn) } ?: ProfileTab.VIDEOS
-
-/**
- * [firstPage] followed by the items of [current] after the first page's last item,
- * without duplicates; null when the two lists no longer overlap.
- */
-private fun mergeFirstPage(current: List<VideoDto>, firstPage: List<VideoDto>): List<VideoDto>? {
-    val anchor = firstPage.lastOrNull() ?: return null
-    val anchorIndex = current.indexOfFirst { it.id == anchor.id }
-    if (anchorIndex < 0) return null
-    val freshIds = firstPage.mapTo(HashSet()) { it.id }
-    return firstPage + current.drop(anchorIndex + 1).filterNot { it.id in freshIds }
-}

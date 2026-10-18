@@ -1,6 +1,8 @@
 package com.ndizigiye.loop.ui.create
 
+import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -39,7 +41,7 @@ sealed interface PostEvent {
  * outcome. Uploads started by other post screens are ignored.
  */
 class PostViewModel(
-    appContext: Context,
+    private val appContext: Context,
     private val uploadManager: UploadManager,
     discoverRepository: DiscoverRepository,
     videoUri: String,
@@ -86,9 +88,15 @@ class PostViewModel(
         _state.update { it.copy(isUploading = true, progress = 0f) }
     }
 
+    /** Cancels this screen's upload unless the server is already processing it. */
     fun cancelUpload() {
         val id = uploadId ?: return
         if (_state.value.isUploading) uploadManager.cancel(id)
+    }
+
+    override fun onCleared() {
+        // A running upload may still be reading the pick; the system drops the oldest kept grants by itself.
+        if (uri.scheme == ContentResolver.SCHEME_CONTENT && !_state.value.isUploading) appContext.releaseReadAccess(uri)
     }
 
     private fun onUploadChanged(upload: UploadState) {
@@ -109,5 +117,25 @@ class PostViewModel(
 
     private companion object {
         const val BUSY_MESSAGE = "Another video is still uploading. Try again when it's done."
+    }
+}
+
+/**
+ * Keeps read access to a picked video beyond this process, so a post screen restored
+ * after process death can still show and upload it. Released by [PostViewModel].
+ */
+internal fun Context.keepReadAccess(uri: Uri) {
+    try {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    } catch (e: SecurityException) {
+        // This picker's grant can't be kept; access then lasts as long as the app runs.
+    }
+}
+
+private fun Context.releaseReadAccess(uri: Uri) {
+    try {
+        contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    } catch (e: SecurityException) {
+        // The grant was never kept.
     }
 }

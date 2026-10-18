@@ -16,6 +16,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.ndizigiye.loop.ui.navigation.LoopApp
+import com.ndizigiye.loop.ui.navigation.MainTab
 import com.ndizigiye.loop.ui.navigation.PictureInPictureLifecycleOwner
 import com.ndizigiye.loop.ui.navigation.PictureInPictureState
 import com.ndizigiye.loop.ui.navigation.videoIdFromDeepLink
@@ -37,6 +38,8 @@ class MainActivity : ComponentActivity() {
     private val deepLinkChannel = Channel<Long>(Channel.UNLIMITED)
     private val deepLinks: Flow<Long> = deepLinkChannel.receiveAsFlow()
 
+    private val container get() = (application as LoopApplication).container
+
     private val supportsPictureInPicture: Boolean by lazy {
         packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
     }
@@ -52,6 +55,10 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) {
             openDeepLink(intent)
         }
+        // The back stack outlives process death, AppContainer does not: restore the tab below it too.
+        savedInstanceState?.getString(KEY_MAIN_TAB)
+            ?.let { name -> MainTab.entries.firstOrNull { it.name == name } }
+            ?.let { container.mainTab.value = it }
 
         pictureInPicture.setActive(isInPictureInPictureMode)
         if (supportsPictureInPicture && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -69,6 +76,11 @@ class MainActivity : ComponentActivity() {
                 LoopApp(deepLinks = deepLinks, pictureInPicture = pictureInPicture)
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_MAIN_TAB, container.mainTab.value.name)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -104,4 +116,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             .build()
+
+    private companion object {
+        const val KEY_MAIN_TAB = "main_tab"
+    }
 }

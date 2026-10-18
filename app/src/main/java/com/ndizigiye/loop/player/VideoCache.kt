@@ -90,6 +90,12 @@ class VideoCache(context: Context, okHttpClient: OkHttpClient) {
         running.forEach { it.cancel() }
     }
 
+    /** Stops the prefetch of [url] if one is in flight, like [cancelPrefetches] does for all. */
+    fun cancelPrefetch(url: String) {
+        val running = synchronized(jobs) { jobs[url]?.job }
+        running?.cancel()
+    }
+
     /**
      * Bytes of video currently on disk. Runs on the IO dispatcher.
      * @throws IllegalStateException after [release].

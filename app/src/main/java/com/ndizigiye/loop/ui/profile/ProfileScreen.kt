@@ -64,6 +64,7 @@ fun ProfileScreen(username: String?, modifier: Modifier = Modifier) {
             username = target,
             userRepository = container.userRepository,
             videoRepository = container.videoRepository,
+            interactions = container.interactions,
             sessionStore = container.sessionStore,
         )
     }
@@ -84,7 +85,7 @@ private fun ProfileContent(viewModel: ProfileViewModel, showBack: Boolean, modif
     val onShare: () -> Unit = remember(context, username) { { context.shareProfile(username) } }
     val onCopyUsername = rememberCopyUsername(username)
 
-    // Every visit reloads, so a new upload, like or bookmark shows up on return.
+    // Every visit reloads (the other tabs once picked), so a new upload, like or bookmark shows up on return.
     LaunchedEffect(viewModel) { viewModel.refresh() }
     LaunchedEffect(viewModel) {
         viewModel.messages.collect { snackbarHostState.showSnackbar(it) }

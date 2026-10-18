@@ -13,11 +13,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -39,8 +40,6 @@ import com.ndizigiye.loop.ui.common.LoadingBox
 import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
 
 /** Loads the next page once the viewer settles this close to the end. */
 private const val LOAD_MORE_THRESHOLD = 3
@@ -57,11 +56,17 @@ private sealed interface FeedSheet {
 /**
  * A full-screen, vertically swiped list of videos over [state], shared by the home
  * feed and the video pager. It shows the loading, error and empty states, pages
- * further through [onLoadMore], plays the settled page while [isActive], the screen
- * is resumed and no sheet is open, prefetches the next videos and the playing
- * video's first comments (see [PreloadPolicy]), and reports each page's view
- * through [onViewed] when it stops being current or the feed is left.
- * [onRemove] drops a video from the list (not interested, deleted).
+ * further through [onLoadMore] ([onRetry] repeats the request that failed), plays
+ * the settled page while [isActive], the screen is resumed and no sheet is open,
+ * prefetches the next videos and the playing video's first comments (see
+ * [PreloadPolicy]), and reports each page's view through [onViewed] when it stops
+ * being current or the feed is left. [onRemove] drops a video from the list (not
+ * interested, deleted).
+ *
+ * [listId] identifies the list in [state]: when it changes (a refresh, another
+ * account) the pager starts again from the top, also when the list was replaced
+ * while the pager was not shown. With [allowPictureInPicture], leaving the app while
+ * a video plays continues it in picture-in-picture.
  */
 @Composable
 internal fun VerticalVideoFeed(
@@ -72,7 +77,9 @@ internal fun VerticalVideoFeed(
     onViewed: (videoId: Long, watchedMs: Long, completed: Boolean) -> Unit,
     onRemove: (videoId: Long) -> Unit,
     modifier: Modifier = Modifier,
+    listId: Long = 0L,
     initialPage: Int = 0,
+    allowPictureInPicture: Boolean = false,
     emptyContent: @Composable () -> Unit = {
         EmptyBox(title = "No videos here yet", icon = Icons.Outlined.VideoLibrary)
     },
@@ -82,8 +89,11 @@ internal fun VerticalVideoFeed(
         state.items.isNotEmpty() -> VideoFeedPager(
             state = state,
             isActive = isActive,
+            listId = listId,
             initialPage = initialPage,
+            allowPictureInPicture = allowPictureInPicture,
             onLoadMore = onLoadMore,
+            onRetry = onRetry,
             onViewed = onViewed,
             onRemove = onRemove,
             modifier = modifier,
@@ -98,8 +108,11 @@ internal fun VerticalVideoFeed(
 private fun VideoFeedPager(
     state: PagedState<VideoDto>,
     isActive: Boolean,
+    listId: Long,
     initialPage: Int,
+    allowPictureInPicture: Boolean,
     onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
     onViewed: (videoId: Long, watchedMs: Long, completed: Boolean) -> Unit,
     onRemove: (videoId: Long) -> Unit,
     modifier: Modifier,
@@ -110,13 +123,15 @@ private fun VideoFeedPager(
     val snackbarHostState = LocalSnackbarHostState.current
     val pagerState = rememberPagerState(initialPage = initialPage.coerceIn(0, videos.lastIndex)) { videos.size }
     val current = pagerState.settledPage.coerceIn(0, videos.lastIndex)
+    val keys = remember(videos) { pageKeys(videos) }
     val pool = rememberFeedPlayerPool()
     val actions = rememberVideoActions()
 
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     var sheet by remember { mutableStateOf<FeedSheet?>(null) }
-    var userPaused by remember(current) { mutableStateOf(false) }
-    var playbackSpeed by remember(current) { mutableFloatStateOf(1f) }
+    // Pausing by tap and the speed belong to the video shown, not to its position in the list.
+    var userPaused by remember(keys[current]) { mutableStateOf(false) }
+    var playbackSpeed by remember(keys[current]) { mutableFloatStateOf(1f) }
     val visiting = isActive && lifecycleState.isAtLeast(Lifecycle.State.STARTED)
     val shouldPlay = visiting &&
         lifecycleState.isAtLeast(Lifecycle.State.RESUMED) &&
@@ -124,9 +139,9 @@ private fun VideoFeedPager(
         !userPaused
 
     val currentOnLoadMore by rememberUpdatedState(onLoadMore)
+    val currentOnRetry by rememberUpdatedState(onRetry)
     val currentOnViewed by rememberUpdatedState(onViewed)
     val currentOnRemove by rememberUpdatedState(onRemove)
-    val latestVideos by rememberUpdatedState(videos)
 
     // Players for the settled page and its neighbours; pages further away show their thumbnail.
     val baseUrl by sessionStore.baseUrl.collectAsStateWithLifecycle()
@@ -156,7 +171,7 @@ private fun VideoFeedPager(
     val visitPlayer = if (visiting) currentPlayer else null
     DisposableEffect(visitPlayer, visitVideo.id) {
         val player = visitPlayer ?: return@DisposableEffect onDispose {}
-        val tracker = WatchTracker(player, visitVideo.durationMs)
+        val tracker = WatchTracker(player)
         tracker.start()
         onDispose {
             val result = tracker.stop()
@@ -194,19 +209,20 @@ private fun VideoFeedPager(
                 actionLabel = "Retry",
                 duration = SnackbarDuration.Long,
             )
-            if (result == SnackbarResult.ActionPerformed) currentOnLoadMore()
+            if (result == SnackbarResult.ActionPerformed) currentOnRetry()
         }
     }
 
-    // A refreshed list (new account, pull to refresh) starts again from the top.
-    LaunchedEffect(pagerState) {
-        snapshotFlow { latestVideos.firstOrNull()?.id }
-            .distinctUntilChanged()
-            .drop(1)
-            .collect { pagerState.scrollToPage(0) }
+    // A refreshed list (new account, pull to refresh) starts again from the top. The list
+    // shown last is saved with the page, so one replaced while the pager was away counts too.
+    var shownListId by rememberSaveable { mutableLongStateOf(listId) }
+    LaunchedEffect(listId) {
+        if (listId != shownListId) {
+            shownListId = listId
+            pagerState.scrollToPage(0)
+        }
     }
 
-    val keys = remember(videos) { pageKeys(videos) }
     VerticalPager(
         state = pagerState,
         modifier = modifier,
@@ -220,6 +236,7 @@ private fun VideoFeedPager(
             isCurrent = index == current,
             isPlaying = index == current && shouldPlay,
             isPaused = index == current && userPaused,
+            allowPictureInPicture = allowPictureInPicture,
             actions = actions,
             onTogglePause = { if (index == current) userPaused = !userPaused },
             onOpenOptions = { sheet = FeedSheet.Options(video) },

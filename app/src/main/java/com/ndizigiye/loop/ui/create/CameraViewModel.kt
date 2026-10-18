@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.MirrorMode
+import androidx.camera.video.ExperimentalPersistentRecording
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -22,6 +23,7 @@ import com.ndizigiye.loop.api.ApiLimits
 import com.ndizigiye.loop.api.SoundDto
 import com.ndizigiye.loop.data.DiscoverRepository
 import com.ndizigiye.loop.data.TEMP_FILE_PREFIX
+import com.ndizigiye.loop.data.upload.UploadManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -42,6 +44,9 @@ enum class CapturePhase {
 
     /** Stop requested; waiting for the file to be finalised. */
     FINALIZING,
+
+    /** Finalised and handed to the post screen; it can be posted again or discarded. */
+    FINISHED,
 }
 
 data class CameraUiState(
@@ -72,11 +77,14 @@ sealed interface CameraEvent {
  * Recording for [CameraScreen]. A take is one file: the record button starts it,
  * then pauses and resumes it ([Recording.pause] / [Recording.resume]), so each
  * pause marks a segment boundary. The screen binds [videoCapture] to the camera
- * together with its preview.
+ * together with its preview. Takes are persistent recordings, so a paused take
+ * survives the camera closing while the screen is stopped and carries on once it
+ * is bound again.
  */
 class CameraViewModel(
     private val appContext: Context,
     discoverRepository: DiscoverRepository,
+    private val uploadManager: UploadManager,
     private val soundId: Long?,
 ) : ViewModel() {
 
@@ -100,8 +108,8 @@ class CameraViewModel(
     private var closingTakes = 0
     private var countdownJob: Job? = null
 
-    /** Finished takes handed to the post screen; deleted when this screen goes away for good. */
-    private val handedOff = mutableListOf<File>()
+    /** The [CapturePhase.FINISHED] take; deleted on discard or when this screen goes away for good. */
+    private var finished: File? = null
 
     init {
         if (soundId != null) {
@@ -137,7 +145,7 @@ class CameraViewModel(
             CapturePhase.IDLE -> if (!current.recorderBusy) afterCountdown(::startTake)
             CapturePhase.RECORDING -> pause()
             CapturePhase.PAUSED -> afterCountdown(::resume)
-            CapturePhase.FINALIZING -> Unit
+            CapturePhase.FINALIZING, CapturePhase.FINISHED -> Unit
         }
     }
 
@@ -153,8 +161,12 @@ class CameraViewModel(
         if (_state.value.torchOn) _state.update { it.copy(torchOn = false) }
     }
 
-    /** Stops the take; the post screen opens once the file is finalised. */
+    /** Stops the take; the post screen opens once the file is finalised. Reopens it for a finished take. */
     fun finish() {
+        finished?.let { file ->
+            _events.trySend(CameraEvent.OpenPost(Uri.fromFile(file).toString(), soundId))
+            return
+        }
         val current = take ?: return
         val phase = _state.value.phase
         if (phase != CapturePhase.RECORDING && phase != CapturePhase.PAUSED) return
@@ -166,6 +178,12 @@ class CameraViewModel(
     /** Throws the current take away; its file is deleted once the recorder has closed it. */
     fun discard() {
         cancelCountdown()
+        finished?.let { file ->
+            finished = null
+            file.delete()
+            resetTake()
+            return
+        }
         val current = take ?: return
         take = null
         closingTakes++
@@ -180,8 +198,9 @@ class CameraViewModel(
             abandoned.file.delete()
         }
         take = null
-        handedOff.forEach { it.delete() }
-        handedOff.clear()
+        // A take still being uploaded (the task was swiped away) is left to the stale temp file cleanup.
+        finished?.takeUnless { uploadManager.isUploading(Uri.fromFile(it)) }?.delete()
+        finished = null
     }
 
     private fun afterCountdown(action: () -> Unit) {
@@ -208,6 +227,7 @@ class CameraViewModel(
 
     // RECORD_AUDIO is checked right before audio is enabled.
     @SuppressLint("MissingPermission")
+    @androidx.annotation.OptIn(ExperimentalPersistentRecording::class)
     private fun startTake() {
         if (take != null) return
         val file = File(appContext.cacheDir, "${TEMP_FILE_PREFIX}take-${System.currentTimeMillis()}.mp4")
@@ -215,6 +235,7 @@ class CameraViewModel(
             .setDurationLimitMillis(ApiLimits.MAX_RECORDING_MS)
             .build()
         val pending = recorder.prepareRecording(appContext, options)
+            .asPersistentRecording()
             .let { if (hasAudioPermission()) it.withAudioEnabled() else it }
         val newTake = Take(file)
         newTake.recording = try {
@@ -270,12 +291,14 @@ class CameraViewModel(
             return
         }
         take = null
-        resetTake()
         val usable = !event.hasError() || event.error == VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED
         if (usable && source.file.length() > 0) {
-            handedOff += source.file
+            // Kept, so going back from the post screen returns to this take rather than an empty recorder.
+            finished = source.file
+            _state.update { it.copy(phase = CapturePhase.FINISHED) }
             _events.trySend(CameraEvent.OpenPost(Uri.fromFile(source.file).toString(), soundId))
         } else {
+            resetTake()
             source.file.delete()
             _events.trySend(CameraEvent.Message(failureMessage(event.error)))
         }

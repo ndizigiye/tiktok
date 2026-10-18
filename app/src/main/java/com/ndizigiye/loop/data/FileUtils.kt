@@ -6,6 +6,7 @@ import android.net.Uri
 import android.webkit.MimeTypeMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -15,9 +16,10 @@ const val TEMP_FILE_PREFIX = "loop-"
 
 /**
  * Copies the content behind [uri] (content:// or file://) into a new file in the
- * cache directory, named "loop-<prefix>…<.ext>", on the IO dispatcher. The file is
- * deleted again when the copy fails or the caller is cancelled, including a
- * cancellation that arrives just after the copy completed.
+ * cache directory, named "loop-<prefix>…<.ext>", on the IO dispatcher. Cancelling the
+ * caller stops the copy between chunks. The file is deleted again when the copy fails
+ * or the caller is cancelled, including a cancellation that arrives just after the
+ * copy completed.
  * @throws IOException when the content cannot be read.
  */
 suspend fun Context.copyUriToCache(uri: Uri, prefix: String): File {
@@ -30,7 +32,17 @@ suspend fun Context.copyUriToCache(uri: Uri, prefix: String): File {
             val target = File.createTempFile(TEMP_FILE_PREFIX + prefix, extension?.let { ".$it" }, cacheDir)
             file = target
             val input = contentResolver.openInputStream(uri) ?: throw IOException("Cannot open $uri")
-            input.use { source -> target.outputStream().use { sink -> source.copyTo(sink) } }
+            input.use { source ->
+                target.outputStream().use { sink ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        ensureActive()
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        sink.write(buffer, 0, read)
+                    }
+                }
+            }
             target
         }
     } catch (e: Throwable) {

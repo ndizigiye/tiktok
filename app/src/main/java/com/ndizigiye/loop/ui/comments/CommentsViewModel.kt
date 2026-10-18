@@ -9,6 +9,10 @@ import com.ndizigiye.loop.data.CommentRepository
 import com.ndizigiye.loop.data.PagedState
 import com.ndizigiye.loop.data.Paginator
 import com.ndizigiye.loop.data.remote.userMessage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,24 +20,32 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 
 /** One-off outcomes for an open comments sheet; dropped while no sheet is collecting. */
 sealed interface CommentsEvent {
     data class Posted(val comment: CommentDto) : CommentsEvent
 
+    data class Deleted(val comment: CommentDto) : CommentsEvent
+
     data class Message(val text: String) : CommentsEvent
 }
 
 /**
- * Comments of one video: paginated top-level comments, reply threads loaded on
- * demand, optimistic comment likes, posting and deleting. Requests run in
- * [viewModelScope], so they finish even when the sheet is closed meanwhile.
+ * Comments of one video while its sheet is open: paginated top-level comments, reply
+ * threads loaded on demand, optimistic comment likes, posting and deleting. Posts,
+ * deletions and likes run in [applicationScope] (on the main thread), so they finish
+ * even when the sheet is closed meanwhile; loading stops with the sheet.
  */
 class CommentsViewModel(
     private val video: VideoDto,
     private val repository: CommentRepository,
+    applicationScope: CoroutineScope,
 ) : ViewModel() {
+
+    private val requestScope = applicationScope + Dispatchers.Main.immediate
 
     private var firstLoad = true
 
@@ -47,6 +59,9 @@ class CommentsViewModel(
     /** Reply threads by top-level comment id. */
     val threads: StateFlow<Map<Long, ReplyThread>> = _threads.asStateFlow()
 
+    /** Parent of the reply requests, so [reload] can drop the ones in flight. */
+    private val replyLoads = SupervisorJob(viewModelScope.coroutineContext.job)
+
     private val _isPosting = MutableStateFlow(false)
     val isPosting: StateFlow<Boolean> = _isPosting.asStateFlow()
 
@@ -56,9 +71,18 @@ class CommentsViewModel(
     private val likesInFlight = mutableSetOf<Long>()
     private val deletesInFlight = mutableSetOf<Long>()
 
-    /** Loads the first page, or refreshes the list once a page has loaded. */
+    /**
+     * Loads the first page, or refreshes the list once a page has loaded. A refresh also
+     * collapses every thread, so replies are fetched afresh when expanded again.
+     */
     fun reload() {
-        if (paginator.state.value.loadedOnce) paginator.refresh() else paginator.loadMore()
+        if (!paginator.state.value.loadedOnce) {
+            paginator.loadMore()
+            return
+        }
+        replyLoads.cancelChildren()
+        _threads.value = emptyMap()
+        paginator.refresh()
     }
 
     fun loadMore() = paginator.loadMore()
@@ -82,7 +106,7 @@ class CommentsViewModel(
         if (thread.isLoading) return
         val cursor = if (thread.loadedOnce) thread.nextCursor ?: return else null
         updateThread(parentId) { it.copy(isLoading = true, error = null) }
-        viewModelScope.launch {
+        viewModelScope.launch(replyLoads) {
             repository.replies(parentId, cursor)
                 .onSuccess { page -> updateThread(parentId) { it.withPage(page) } }
                 .onFailure { error ->
@@ -98,7 +122,7 @@ class CommentsViewModel(
         val liked = !before.likedByMe
         val optimisticCount = (before.likeCount + if (liked) 1 else -1).coerceAtLeast(0)
         updateComment(before.id) { it.copy(likedByMe = liked, likeCount = optimisticCount) }
-        viewModelScope.launch {
+        requestScope.launch {
             try {
                 repository.setLiked(before.id, liked)
                     .onSuccess { result ->
@@ -119,7 +143,7 @@ class CommentsViewModel(
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _isPosting.value) return
         _isPosting.value = true
-        viewModelScope.launch {
+        requestScope.launch {
             try {
                 repository.post(video, trimmed, replyTo?.id)
                     .onSuccess { comment ->
@@ -137,10 +161,13 @@ class CommentsViewModel(
     fun delete(comment: CommentDto) {
         val current = find(comment.id) ?: comment
         if (!deletesInFlight.add(current.id)) return
-        viewModelScope.launch {
+        requestScope.launch {
             try {
                 repository.delete(video, current)
-                    .onSuccess { removeLocally(current) }
+                    .onSuccess {
+                        removeLocally(current)
+                        _events.tryEmit(CommentsEvent.Deleted(current))
+                    }
                     .onFailure { error -> _events.tryEmit(CommentsEvent.Message(error.userMessage())) }
             } finally {
                 deletesInFlight.remove(current.id)

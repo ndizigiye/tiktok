@@ -12,6 +12,13 @@ import io.ktor.server.routing.get
 /** Discover page, search, hashtag and sound pages. */
 fun Route.discoverRoutes(services: LoopServices) {
     val discover = services.discover
+    // Public: nothing in a hashtag or sound depends on the viewer, so the token is not checked.
+    get("/api/hashtags/{name}") {
+        call.respond(discover.hashtag(call.textParam("name")))
+    }
+    get("/api/sounds/{id}") {
+        call.respond(discover.sound(call.idParam("id", SOUND_NOT_FOUND)))
+    }
     authenticate(JWT_AUTH, optional = true) {
         get("/api/discover") {
             call.respond(discover.trending(call.viewerId()))
@@ -20,14 +27,8 @@ fun Route.discoverRoutes(services: LoopServices) {
             val limit = PageRequest.of(cursor = null, limit = call.request.queryParameters["limit"], default = SEARCH_LIMIT).limit
             call.respond(discover.search(call.request.queryParameters["q"], limit, call.viewerId()))
         }
-        get("/api/hashtags/{name}") {
-            call.respond(discover.hashtag(call.textParam("name")))
-        }
         get("/api/hashtags/{name}/videos") {
             call.respond(services.videos.hashtagVideos(call.textParam("name"), call.viewerId(), call.pageRequest()))
-        }
-        get("/api/sounds/{id}") {
-            call.respond(discover.sound(call.idParam("id", SOUND_NOT_FOUND)))
         }
         get("/api/sounds/{id}/videos") {
             call.respond(services.videos.soundVideos(call.idParam("id", SOUND_NOT_FOUND), call.viewerId(), call.pageRequest()))

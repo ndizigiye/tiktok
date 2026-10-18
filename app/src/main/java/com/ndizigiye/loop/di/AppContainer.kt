@@ -73,7 +73,7 @@ class AppContainer(context: Context) {
     val inboxRepository: InboxRepository by lazy { InboxRepository(api, sessionStore, interactions) }
 
     val authRepository: AuthRepository by lazy {
-        AuthRepository(api, sessionStore, interactions, inboxRepository)
+        AuthRepository(api, sessionStore, interactions, inboxRepository, commentRepository)
     }
 
     val videoRepository: VideoRepository by lazy { VideoRepository(api, interactions) }
@@ -91,6 +91,9 @@ class AppContainer(context: Context) {
 
     val videoListHandoff: VideoListHandoff = VideoListHandoff()
 
-    /** Selected bottom tab of the main shell; survives navigation to other destinations. */
+    /**
+     * Selected bottom tab of the main shell; survives navigation to other destinations.
+     * MainActivity restores it with the back stack after process death.
+     */
     val mainTab: MutableStateFlow<MainTab> = MutableStateFlow(MainTab.HOME)
 }

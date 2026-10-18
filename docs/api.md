@@ -12,7 +12,10 @@ both sides serialize them with kotlinx.serialization (`ignoreUnknownKeys = true`
   HS256 JWTs with the user id in the `uid` claim and a 30-day expiry.
   - **[auth]** endpoints return `401` without a valid token.
   - **[opt]** endpoints work anonymously; with a token, viewer-specific fields
-    (`likedByMe`, `bookmarkedByMe`, `isFollowing`, `isMe`) are filled in.
+    (`likedByMe`, `bookmarkedByMe`, `isFollowing`, `isMe`) are filled in. A token
+    that is sent but invalid or expired still gets `401`, so the client notices
+    the session has ended (the app then signs out).
+  - Endpoints without a tag are public and ignore the `Authorization` header.
 - Errors: any non-2xx response has an `ErrorDto` body
   `{"code": "...", "message": "..."}`. Codes: `validation` (400),
   `unauthorized` (401), `invalid_credentials` (401), `forbidden` (403),

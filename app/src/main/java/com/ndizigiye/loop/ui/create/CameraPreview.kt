@@ -45,12 +45,14 @@ internal fun oppositeLens(lensFacing: Int): Int =
 /**
  * Camera preview filling [modifier]. Binds a 16:9 preview and [videoCapture] to the
  * current lifecycle owner with [lensFacing] (or the other lens when that one is
- * missing), rebinds when the lens changes and unbinds when it leaves.
+ * missing), rebinds when the lens changes and unbinds when it leaves. The screen
+ * stays on while [keepScreenOn].
  */
 @Composable
 internal fun CameraPreview(
     videoCapture: VideoCapture<Recorder>,
     lensFacing: Int,
+    keepScreenOn: Boolean,
     onBound: (BoundCamera?) -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -75,7 +77,7 @@ internal fun CameraPreview(
             .build()
     }
 
-    AndroidView(factory = { previewView }, modifier = modifier)
+    AndroidView(factory = { previewView }, modifier = modifier, update = { it.keepScreenOn = keepScreenOn })
 
     DisposableEffect(context, lifecycleOwner, lensFacing, videoCapture) {
         val providerFuture = ProcessCameraProvider.getInstance(context)

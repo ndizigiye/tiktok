@@ -9,6 +9,9 @@ import com.ndizigiye.loop.data.remote.LoopApi
 import com.ndizigiye.loop.data.remote.ProgressRequestBody
 import com.ndizigiye.loop.data.remote.apiCall
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -21,6 +24,11 @@ class VideoRepository(
     private val api: LoopApi,
     private val interactions: InteractionStore,
 ) {
+    private val _deletedVideos = MutableSharedFlow<Long>()
+
+    /** Ids of videos deleted through [delete], so lists loaded earlier can drop them. */
+    val deletedVideos: SharedFlow<Long> = _deletedVideos.asSharedFlow()
+
     suspend fun feed(type: FeedType, cursor: String?): Result<PageDto<VideoDto>> = page {
         when (type) {
             FeedType.FOR_YOU -> api.forYouFeed(cursor)
@@ -88,7 +96,9 @@ class VideoRepository(
 
     suspend fun notInterested(videoId: Long): Result<Unit> = apiCall { api.notInterested(videoId) }
 
-    suspend fun delete(videoId: Long): Result<Unit> = apiCall { api.deleteVideo(videoId) }
+    /** Deletes the viewer's own video and announces it on [deletedVideos]. */
+    suspend fun delete(videoId: Long): Result<Unit> =
+        apiCall { api.deleteVideo(videoId) }.onSuccess { _deletedVideos.emit(videoId) }
 
     /**
      * Uploads [file] as a new video. [onProgress] receives 0f..1f on a background
@@ -138,11 +148,16 @@ class VideoRepository(
     private companion object {
         val TEXT_PLAIN = "text/plain; charset=utf-8".toMediaType()
 
+        /**
+         * The content type of the `video` part. Formats the server does not accept go as
+         * octet-stream, so it rejects them with its own message instead of storing them as MP4.
+         */
         fun videoMimeType(file: File): String = when (file.extension.lowercase()) {
+            "mp4" -> "video/mp4"
             "webm" -> "video/webm"
             "3gp" -> "video/3gpp"
             "mov" -> "video/quicktime"
-            else -> "video/mp4"
+            else -> "application/octet-stream"
         }
     }
 }

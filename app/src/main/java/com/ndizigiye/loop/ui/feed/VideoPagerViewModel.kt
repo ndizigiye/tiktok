@@ -40,7 +40,8 @@ internal class VideoPagerViewModel(
 
     fun loadMore() = paginator.loadMore()
 
-    fun refresh() = paginator.refresh()
+    /** Repeats the request that failed: the list is never refreshed, so it was the first or the next page. */
+    fun retry() = paginator.loadMore()
 
     fun remove(videoId: Long) {
         paginator.update { items -> items.filterNot { it.id == videoId } }

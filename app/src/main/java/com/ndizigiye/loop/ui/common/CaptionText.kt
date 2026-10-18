@@ -41,29 +41,11 @@ fun CaptionText(
     val currentOnHashtag by rememberUpdatedState(onHashtag)
     val currentOnMention by rememberUpdatedState(onMention)
     val annotated: AnnotatedString = remember(text) {
-        buildAnnotatedString {
-            for (token in CaptionParser.tokenize(text)) {
-                when (token) {
-                    is CaptionParser.Token.Plain -> append(token.text)
-                    is CaptionParser.Token.Hashtag -> {
-                        val link = LinkAnnotation.Clickable(
-                            tag = "hashtag:${token.name}",
-                            styles = TokenLinkStyles,
-                            linkInteractionListener = LinkInteractionListener { currentOnHashtag(token.name) },
-                        )
-                        withLink(link) { append(token.text) }
-                    }
-                    is CaptionParser.Token.Mention -> {
-                        val link = LinkAnnotation.Clickable(
-                            tag = "mention:${token.username}",
-                            styles = TokenLinkStyles,
-                            linkInteractionListener = LinkInteractionListener { currentOnMention(token.username) },
-                        )
-                        withLink(link) { append(token.text) }
-                    }
-                }
-            }
-        }
+        captionWithLinks(
+            text = text,
+            onHashtag = { currentOnHashtag(it) },
+            onMention = { currentOnMention(it) },
+        )
     }
     Text(
         text = annotated,
@@ -73,4 +55,37 @@ fun CaptionText(
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
     )
+}
+
+/**
+ * [text] with a bold [LinkAnnotation.Clickable] on every #hashtag (tag "hashtag:<name>")
+ * and @mention (tag "mention:<username>"); a tap calls [onHashtag] / [onMention] with
+ * the lowercase name.
+ */
+internal fun captionWithLinks(
+    text: String,
+    onHashtag: (String) -> Unit,
+    onMention: (String) -> Unit,
+): AnnotatedString = buildAnnotatedString {
+    for (token in CaptionParser.tokenize(text)) {
+        when (token) {
+            is CaptionParser.Token.Plain -> append(token.text)
+            is CaptionParser.Token.Hashtag -> {
+                val link = LinkAnnotation.Clickable(
+                    tag = "hashtag:${token.name}",
+                    styles = TokenLinkStyles,
+                    linkInteractionListener = LinkInteractionListener { onHashtag(token.name) },
+                )
+                withLink(link) { append(token.text) }
+            }
+            is CaptionParser.Token.Mention -> {
+                val link = LinkAnnotation.Clickable(
+                    tag = "mention:${token.username}",
+                    styles = TokenLinkStyles,
+                    linkInteractionListener = LinkInteractionListener { onMention(token.username) },
+                )
+                withLink(link) { append(token.text) }
+            }
+        }
+    }
 }

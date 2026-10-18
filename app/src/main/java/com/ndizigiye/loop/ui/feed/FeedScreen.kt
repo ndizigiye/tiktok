@@ -177,6 +177,7 @@ private fun FeedPage(
     emptyContent: @Composable () -> Unit,
 ) {
     val state by viewModel.state(type).collectAsStateWithLifecycle()
+    val listId by viewModel.listId(type).collectAsStateWithLifecycle()
     val refreshState = rememberPullToRefreshState()
     PullToRefreshBox(
         isRefreshing = state.isRefreshing,
@@ -198,10 +199,11 @@ private fun FeedPage(
             state = state,
             isActive = isActive,
             onLoadMore = { viewModel.loadMore(type) },
-            onRetry = { viewModel.refresh(type) },
+            onRetry = { viewModel.retry(type) },
             onViewed = viewModel::recordView,
             onRemove = viewModel::remove,
             modifier = Modifier.fillMaxSize(),
+            listId = listId,
             emptyContent = emptyContent,
         )
     }

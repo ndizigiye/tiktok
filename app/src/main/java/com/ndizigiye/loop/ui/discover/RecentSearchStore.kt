@@ -34,6 +34,11 @@ class RecentSearchStore(context: Context) {
         prefs.edit().putString(KEY_QUERIES, LoopJson.encodeToString(QueriesSerializer, queries)).apply()
     }
 
+    /** Forgets every query, e.g. on log-out; writes to disk asynchronously. */
+    fun clear() {
+        prefs.edit().remove(KEY_QUERIES).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "loop_search"
         const val KEY_QUERIES = "recent_queries"

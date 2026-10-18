@@ -33,6 +33,12 @@ import com.ndizigiye.loop.ui.common.LocalSnackbarHostState
 import com.ndizigiye.loop.ui.navigation.LocalAppContainer
 import com.ndizigiye.loop.ui.navigation.LocalNavigator
 
+/**
+ * Stands in for the first page of a trending hashtag's videos: the pager only continues
+ * a list that has a cursor. The server's cursors are never empty.
+ */
+private const val FIRST_PAGE_CURSOR = ""
+
 /** The Discover tab: a search entry point, trending creators, hashtags and sounds. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,11 +108,17 @@ private fun DiscoverContent(state: DiscoverUiState, onRetry: () -> Unit, modifie
                 onCreatorClick = { user -> navigator.openProfile(user.username) },
                 onHashtagClick = navigator::openHashtag,
                 onVideoClick = { hashtag, videos, index ->
+                    // The strip is the start of the hashtag's list (same order), so the pager goes
+                    // on with that list from its first page, skipping the videos already shown.
+                    val shownIds = videos.mapTo(HashSet()) { it.id }
                     navigator.openVideoPager(
-                        videos,
-                        index,
-                        null,
-                        loadMore = { cursor -> videoRepository.hashtagVideos(hashtag, cursor) },
+                        videos = videos,
+                        startIndex = index,
+                        nextCursor = FIRST_PAGE_CURSOR,
+                        loadMore = { cursor ->
+                            videoRepository.hashtagVideos(hashtag, cursor.takeUnless { it == FIRST_PAGE_CURSOR })
+                                .map { page -> page.copy(items = page.items.filterNot { it.id in shownIds }) }
+                        },
                     )
                 },
                 onSoundClick = { sound -> navigator.openSound(sound.id) },
