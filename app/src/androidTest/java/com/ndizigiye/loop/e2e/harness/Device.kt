@@ -1,10 +1,15 @@
 package com.ndizigiye.loop.e2e.harness
 
 import android.app.Activity
+import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
@@ -91,6 +96,54 @@ fun visibleMainActivity(): MainActivity? {
     return (monitor.getActivitiesInStage(Stage.RESUMED) + monitor.getActivitiesInStage(Stage.PAUSED))
         .filterIsInstance<MainActivity>()
         .firstOrNull()
+}
+
+/**
+ * The semantics nodes of the visible MainActivity's window that match [matcher] and are laid
+ * out, read straight from its Compose root. Compose's test API only looks at windows whose
+ * lifecycle is resumed, so it sees nothing at all of an activity that is paused in
+ * picture-in-picture; this does. Main thread only.
+ */
+fun visibleMainActivityNodes(matcher: SemanticsMatcher, useUnmergedTree: Boolean = true): List<SemanticsNode> {
+    val activity = visibleMainActivity() ?: return emptyList()
+    return activity.findViews<ViewRootForTest>()
+        .flatMap { root -> root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = !useUnmergedTree) }
+        .filter { node -> matcher.matches(node) && node.isPlaced }
+}
+
+/** A pager keeps pages it no longer shows for reuse, unplaced. */
+private val SemanticsNode.isPlaced: Boolean
+    get() = generateSequence(layoutInfo) { it.parentInfo }.all { it.isPlaced && !it.isDeactivated }
+
+/** Where the visible MainActivity's window is on the display; main thread only. */
+fun visibleMainActivityBounds(): Rect? {
+    val decor = visibleMainActivity()?.window?.decorView ?: return null
+    val location = IntArray(2).also { decor.getLocationOnScreen(it) }
+    return Rect(location[0], location[1], location[0] + decor.width, location[1] + decor.height)
+}
+
+private const val APP_PACKAGE = "com.ndizigiye.loop"
+
+/**
+ * The app's task as `dumpsys activity activities` lists it (its `Task{...}` line) while the
+ * window manager runs it in the pinned windowing mode, i.e. in picture-in-picture; otherwise null.
+ */
+fun pinnedAppTask(): String? =
+    shell("dumpsys activity activities").lineSequence()
+        .map { it.trim() }
+        .firstOrNull { line -> "Task{" in line && "mode=pinned" in line && ":$APP_PACKAGE " in line }
+
+/**
+ * The window configuration of MainActivity's window as `dumpsys window windows` reports it
+ * (`winConfig={ mBounds=... mWindowingMode=... }`), or null when it has no window.
+ */
+fun mainActivityWindowConfiguration(): String? {
+    val dump = shell("dumpsys window windows")
+    val window = dump.indexOf("$APP_PACKAGE/$APP_PACKAGE.MainActivity}:")
+    if (window < 0) return null
+    val start = dump.indexOf("winConfig={", window)
+    if (start < 0) return null
+    return dump.substring(start, dump.indexOf('}', start) + 1)
 }
 
 /** Every view of [activity]'s window that is a [T], depth first. */

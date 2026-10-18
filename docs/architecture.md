@@ -417,7 +417,7 @@ deployment against the live project.
   ```
 
   `CreateDeviceTest` expects the camera and microphone permissions not to be granted yet (as
-  after installing); the picture-in-picture test is skipped on devices without the
+  after installing); the picture-in-picture tests are skipped on devices without the
   `android.software.picture_in_picture` feature. Screenshots are taken from the host because
   capturing on a software-emulated device takes over a minute while video plays.
 
@@ -429,6 +429,15 @@ deployment against the live project.
   1500` (so slow devices don't turn taps into long presses), animation scales 0, and optionally
   `adb shell wm size 540x1170; adb shell wm density 220` (same dp layout, a quarter of the
   pixels); `adb shell am clear-debug-app` undoes the debug flag afterwards. ATD images have no
-  picture-in-picture, so that test is skipped there, and under heavy load their `audioserver`
+  picture-in-picture, so those tests are skipped there, and under heavy load their `audioserver`
   can be aborted by its own watchdog, after which every audio call of the app waits for it;
   `adb root && adb shell start audioserver` brings it back.
+
+  For picture-in-picture use a full image, e.g. `system-images;android-30;default;x86_64`
+  (the same setup minus `debug.hwui.drawing_enabled`, which only ATD images need; right after
+  boot, dismiss any "isn't responding" dialogs of the system with Wait). The tests check the
+  window with `dumpsys` (the app's task in the `pinned` windowing mode) and read its semantics
+  straight from its Compose root, because Compose's test API only sees resumed windows and an
+  activity in picture-in-picture is paused. They press the window menu's buttons by
+  accessibility and raise the "Time to take action" setting meanwhile: on a software-emulated
+  device the menu otherwise shows for only a second or two.

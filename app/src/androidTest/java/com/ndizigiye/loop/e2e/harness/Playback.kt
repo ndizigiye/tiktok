@@ -11,6 +11,7 @@ import androidx.media3.ui.PlayerView
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 // What the video on screen is really doing, read from its ExoPlayer: the feed shows each
@@ -78,6 +79,32 @@ fun ComposeTestRule.waitUntilPlaying(timeout: Duration = PlaybackTimeout): Playb
         now != null && before != null && now.positionMs != before.positionMs && now.renderedFrames > before.renderedFrames
     }
     return latest!!
+}
+
+/**
+ * Waits until the video on screen has played on for [atLeast] of its own time while the
+ * decoder kept putting new frames on the surface, counting across a start-over at its end;
+ * returns the time played. Only stretches between two looks at which it was playing count.
+ */
+fun ComposeTestRule.waitUntilPlayedFor(atLeast: Duration, timeout: Duration = PlaybackTimeout): Duration {
+    val first = currentPlayback()
+    var earlier = first
+    var playedMs = 0L
+    waitFor("the video on screen plays on for $atLeast", timeout) {
+        val now = currentPlayback()
+        val before = earlier
+        earlier = now
+        if (now != null && before != null && now.isPlaying && before.isPlaying) {
+            playedMs += if (now.positionMs >= before.positionMs) {
+                now.positionMs - before.positionMs
+            } else {
+                // It reached the end and started over.
+                (before.durationMs - before.positionMs).coerceAtLeast(0L) + now.positionMs
+            }
+        }
+        playedMs >= atLeast.inWholeMilliseconds && now != null && first != null && now.renderedFrames > first.renderedFrames
+    }
+    return playedMs.milliseconds
 }
 
 /** Waits until the video on screen is paused and its position stays put. */

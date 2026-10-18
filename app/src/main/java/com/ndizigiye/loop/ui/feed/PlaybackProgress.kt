@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
@@ -35,6 +36,9 @@ private val TouchHeight = 24.dp
 private const val POLL_INTERVAL_MS = 100L
 private val TrackColor = Color(0x40FFFFFF)
 private val PlayedColor = Color(0xCCFFFFFF)
+
+/** Test tag of a page's progress line, which has no other semantics. */
+internal const val PLAYBACK_PROGRESS_TAG = "playback_progress"
 
 /**
  * A thin progress line for [player], polled while [isCurrent]. Dragging
@@ -71,7 +75,7 @@ internal fun PlaybackProgress(
     val playedFraction = scrub
         ?: if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = modifier.testTag(PLAYBACK_PROGRESS_TAG), horizontalAlignment = Alignment.CenterHorizontally) {
         if (scrub != null) {
             Text(
                 text = "${formatDuration((scrub * durationMs).toLong())} / ${formatDuration(durationMs)}",
