@@ -1,0 +1,27 @@
+# Gradle / build
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Server runtime data (database, uploaded and generated media)
+server/data/
+*.db
+*.db-journal
+
+# Signing
+*.jks
+*.keystore
+
+# Secrets (LOOP_DATABASE_URL, LOOP_SUPABASE_SERVICE_KEY, LOOP_JWT_SECRET) live in the environment only
+.env
+.env.*

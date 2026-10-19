@@ -1,0 +1,14 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{24} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="WARN">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- The tests use the development JWT secret on purpose; keep real errors visible. -->
+    <logger name="io.ktor.test" level="ERROR"/>
+</configuration>

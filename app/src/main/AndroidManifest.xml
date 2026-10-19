@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Uploads run in a dataSync foreground service; its notification shows progress and the result. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- "Save video" writes to the shared Movies folder; Android 10+ needs no permission for that. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- Recording is optional: the app installs and works for watching on devices without them. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
+    <!--
+        networkSecurityConfig allows cleartext HTTP because the Loop server is a
+        development backend reached over plain HTTP on the emulator host alias
+        (10.0.2.2) or a LAN address. Put the server behind HTTPS before any
+        public deployment and tighten the config.
+    -->
+    <application
+        android:name=".LoopApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Loop">
+
+        <!--
+            Picture-in-picture resizes the window instead of recreating the activity, so
+            the video keeps playing. singleTop delivers deep links to the running activity.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:supportsPictureInPicture="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- loop://video/{id}, the "Open in Loop" link on the server's share page. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="video"
+                    android:scheme="loop" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".data.upload.UploadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
+            Asks Google Play services to install its photo picker on devices without a
+            built-in one (Android 10 and lower), so "Upload" opens a photo picker there too
+            instead of the document browser.
+        -->
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            android:enabled="false"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
+            </intent-filter>
+            <meta-data
+                android:name="photopicker_activity:0:required"
+                android:value="" />
+        </service>
+    </application>
+
+</manifest>
